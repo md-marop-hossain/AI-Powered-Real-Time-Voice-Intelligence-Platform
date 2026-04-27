@@ -1,0 +1,33 @@
+:root {
+  /* Canvas — warm off-white, never pure #fff */
+  --canvas: #F5F1EA;
+  --canvas-elevated: #FBF8F2;
+  --canvas-sunken: #ECE6DB;
+
+  /* Ink — deep warm black, never pure #000 */
+  --ink: #1A1814;
+  --ink-soft: #4A453C;
+  --ink-muted: #8A8478;
+
+  /* Accent — single electric color, used sparingly */
+  --accent: #E8472C;
+  --accent-hover: #C93A22;
+
+  /* Signal colors */
+  --success: #2F6F4F;
+  --warning: #B8860B;
+  --error: #A02B1F;
+
+  /* Borders & dividers */
+  --rule: rgba(26, 24, 20, 0.10);
+  --rule-strong: rgba(26, 24, 20, 0.20);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

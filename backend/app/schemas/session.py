@@ -1,0 +1,47 @@
+from datetime import datetime
+from uuid import UUID
+
+from pydantic import BaseModel, Field
+
+
+class StartSessionRequest(BaseModel):
+    resume_id: UUID
+    role: str = Field(min_length=1, max_length=255)
+    duration_minutes: int = Field(default=20, ge=5, le=60)
+
+
+class TurnResponse(BaseModel):
+    id: UUID
+    index: int
+    question: str
+    question_kind: str
+    answer: str | None
+    scores: dict | None
+    asked_at: datetime
+    answered_at: datetime | None
+
+    model_config = {"from_attributes": True}
+
+
+class SessionResponse(BaseModel):
+    id: UUID
+    role: str
+    duration_minutes: int
+    status: str
+    started_at: datetime | None
+    ended_at: datetime | None
+    final_scores: dict | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class SessionDetail(SessionResponse):
+    turns: list[TurnResponse] = []
+
+
+class ReportResponse(BaseModel):
+    session_id: UUID
+    overall_score: float
+    summary: dict
+    pdf_url: str | None = None
