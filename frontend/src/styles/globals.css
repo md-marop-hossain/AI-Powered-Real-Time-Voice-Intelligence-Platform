@@ -1,0 +1,165 @@
+@import "./tokens.css";
+@import "./typography.css";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root {
+  height: 100%;
+}
+
+html {
+  background: var(--canvas);
+}
+
+body {
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: "Geist Sans", system-ui, sans-serif;
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Editorial focus ring */
+*:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* Selection in vermillion */
+::selection {
+  background: var(--accent);
+  color: var(--canvas-elevated);
+}
+
+/* Editorial inputs — no rounded boxes, hairline rules */
+.editorial-input {
+  width: 100%;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--rule-strong);
+  border-radius: 0;
+  padding: 12px 0;
+  color: var(--ink);
+  font-family: "Geist Sans", system-ui, sans-serif;
+  font-size: 1.0625rem;
+  line-height: 1.4;
+  transition: border-color 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.editorial-input::placeholder {
+  color: var(--ink-muted);
+}
+
+.editorial-input:focus {
+  outline: none;
+  border-bottom-color: var(--ink);
+}
+
+/* Underline-grow link */
+.editorial-link {
+  position: relative;
+  color: var(--ink);
+  text-decoration: none;
+  padding-bottom: 2px;
+}
+
+.editorial-link::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: currentColor;
+  transform-origin: right;
+  transform: scaleX(1);
+  transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.editorial-link:hover::after {
+  transform-origin: left;
+  transform: scaleX(1);
+}
+
+.editorial-link.is-quiet::after {
+  transform: scaleX(0);
+  transform-origin: left;
+}
+
+.editorial-link.is-quiet:hover::after {
+  transform: scaleX(1);
+}
+
+/* Loading line — draws across, then erases */
+@keyframes draw-line {
+  0%   { transform: scaleX(0); transform-origin: left; }
+  45%  { transform: scaleX(1); transform-origin: left; }
+  55%  { transform: scaleX(1); transform-origin: right; }
+  100% { transform: scaleX(0); transform-origin: right; }
+}
+
+.loading-line {
+  height: 1px;
+  background: var(--ink);
+  animation: draw-line 1.6s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+/* Pulsing colon for the timer */
+@keyframes timer-blink {
+  0%, 49%   { opacity: 1; }
+  50%, 100% { opacity: 0.25; }
+}
+
+.timer-colon {
+  animation: timer-blink 1s steps(2, jump-none) infinite;
+}
+
+/* Vertical AI-speaking indicator */
+@keyframes ai-pulse {
+  0%, 100% { transform: scaleY(0.6); opacity: 0.55; }
+  50%      { transform: scaleY(1);   opacity: 1; }
+}
+
+.ai-pulse {
+  animation: ai-pulse 1.4s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+  transform-origin: center;
+}
+
+/* Container — 12 col with 80px gutter desktop */
+.editorial-container {
+  margin-inline: auto;
+  padding-inline: 24px;
+  max-width: 1440px;
+}
+
+@media (min-width: 768px) {
+  .editorial-container {
+    padding-inline: 80px;
+  }
+}
+
+/* Section vertical rhythm */
+.section-rhythm > * + * {
+  margin-top: 64px;
+}
+
+@media (min-width: 768px) {
+  .section-rhythm > * + * {
+    margin-top: 120px;
+  }
+}
+
+/* Hairline */
+.hairline {
+  height: 1px;
+  background: var(--rule);
+}
+
+.hairline-strong {
+  height: 1px;
+  background: var(--rule-strong);
+}

@@ -1,0 +1,86 @@
+[project]
+name = "mock-interview-backend"
+version = "0.1.0"
+description = "AI-Powered Voice-Based Mock Interview System backend"
+requires-python = ">=3.11"
+dependencies = [
+    # Web
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    "websockets>=12.0",
+    "python-multipart>=0.0.9",
+
+    # DB
+    "sqlalchemy[asyncio]>=2.0.25",
+    "alembic>=1.13.1",
+    "asyncpg>=0.29.0",
+    "pgvector>=0.2.5",
+
+    # Validation & config
+    "pydantic>=2.6.0",
+    "pydantic-settings>=2.2.0",
+    "email-validator>=2.1.0",
+
+    # Auth
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
+    "bcrypt==4.0.1",
+    "google-auth>=2.28.0",
+    "authlib>=1.3.0",
+
+    # Background jobs
+    "celery>=5.3.6",
+    "redis>=5.0.1",
+
+    # Rate limiting
+    "slowapi>=0.1.9",
+
+    # Email
+    "fastapi-mail>=1.4.1",
+
+    # Object storage
+    "boto3>=1.34.0",
+
+    # AI / ML
+    "groq>=0.4.2",
+    "openai>=1.14.0",
+    "deepgram-sdk>=3.2.0",
+    "elevenlabs>=0.2.27",
+    "sentence-transformers>=2.3.1",
+
+    # Resume parsing
+    "pymupdf>=1.23.26",
+    "python-docx>=1.1.0",
+
+    # PDF generation
+    "weasyprint>=60.2",
+    "jinja2>=3.1.3",
+
+    # HTTP
+    "httpx>=0.26.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.5",
+    "pytest-cov>=4.1.0",
+    "schemathesis>=3.25.0",
+    "ruff>=0.2.0",
+    "mypy>=1.8.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
