@@ -20,6 +20,7 @@ app/interviews/stt.py
 app/interviews/tts.py
 app/interviews/websocket.py
 app/models/__init__.py
+app/models/email_verification_token.py
 app/models/interview_template.py
 app/models/password_reset_token.py
 app/models/report.py

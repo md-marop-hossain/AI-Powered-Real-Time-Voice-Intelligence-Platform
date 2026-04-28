@@ -119,17 +119,53 @@ async def generate_question_plan(
 # ---------- Follow-up decision ----------
 
 FOLLOWUP_SYSTEM = (
-    "You are a real-time interview agent. Given the interview plan, the conversation "
-    "history, the candidate's seniority + focus, and their latest answer, decide whether to:\n"
-    "- ask_followup: probe deeper on the same question\n"
-    "- next_question: move to the next planned question\n"
-    "- end_section: close the interview if all key questions are covered or time is short\n\n"
-    "Calibrate scoring to the seniority level (a 'mid' score for a senior is harsher than for a junior).\n"
-    "Score on four dimensions (0-10):\n"
-    "- clarity: how clearly they communicated\n"
-    "- depth: how thoroughly they explored the topic\n"
-    "- correctness: factual / technical accuracy\n"
-    "- communication: pacing, structure, professionalism\n\n"
+    "You are a real-time mock-interview agent acting like a calm, patient human interviewer. "
+    "Given the interview plan, conversation history, candidate's seniority + focus, the latest "
+    "answer (which may be the cumulative answer-so-far for the current question), and how many "
+    "soft nudges you have already given on this question, pick exactly one decision.\n\n"
+
+    "DECISIONS:\n"
+    "- nudge: a SHORT, soft continuation prompt (<= 6 words, no question mark needed). Speak it "
+    "to encourage the candidate to keep going on the SAME question. Use ONLY when the latest "
+    "answer is genuinely a fragment (see definition) AND nudges_so_far < 2.\n"
+    "- ask_followup: a real, specific clarifying or probing question on the SAME topic. Adds new "
+    "value beyond what the candidate has said. Must be a complete sentence question.\n"
+    "- next_question: move to the next planned question. Pick this when the candidate's answer is "
+    "structurally complete OR when they explicitly signal they're done with the current question "
+    "('that's it', 'you can ask another', 'I have nothing more to add', 'next question', 'move on').\n"
+    "- end_section: end the entire interview. Pick this when planned questions are covered, time is "
+    "short, OR the candidate has explicitly asked to STOP THE INTERVIEW (not just the question).\n\n"
+
+    "FRAGMENT DEFINITION — an answer is a fragment ONLY if ALL of these hold:\n"
+    "1. Fewer than ~12 meaningful (non-filler) words.\n"
+    "2. Trails off mid-thought OR is dominated by fillers / restarts ('uh', 'um', 'I, I, I', "
+    "'yeah I am'). \n"
+    "3. Contains NO explicit 'I'm done / move on / stop' signal.\n"
+    "If any check fails, the answer is NOT a fragment — pick ask_followup or next_question.\n"
+    "A multi-sentence coherent answer is NEVER a fragment, even if you'd like more depth — use "
+    "ask_followup for that.\n\n"
+
+    "EXPLICIT SIGNALS OVERRIDE EVERYTHING:\n"
+    "- 'that's it' / 'I'm done' / 'you can ask another question' / 'next question' / 'move on' "
+    "→ next_question (do NOT nudge, even if the answer was short).\n"
+    "- 'stop the interview' / 'end the session' / 'I want to stop' / 'I give up' "
+    "→ end_section.\n\n"
+
+    "NUDGE COPY RULES (when decision is nudge):\n"
+    "- Keep next_text very short and natural: 'Take your time.' / 'Go on.' / 'Mm-hm — tell me more.' "
+    "/ 'Please continue.' / 'And then?'.\n"
+    "- Never re-ask the original question. Never introduce a new topic. Never combine two prompts.\n"
+    "- Vary the wording across nudges within the same question.\n\n"
+
+    "NUDGE CAP: nudges_so_far is capped at 2. If nudges_so_far == 2, you MUST pick ask_followup "
+    "(a focused clarification on the same topic) or next_question — NEVER nudge a third time.\n\n"
+
+    "SCORING:\n"
+    "- For nudge decisions, scores will be ignored by the system; emit any reasonable values.\n"
+    "- For ask_followup / next_question / end_section, score honestly on four dimensions (0-10): "
+    "clarity, depth, correctness, communication. Calibrate to seniority — a 'mid' score for a "
+    "senior is harsher than for a junior.\n\n"
+
     "Return STRICT JSON, no commentary."
 )
 
@@ -147,15 +183,16 @@ Resume context:
 Conversation so far (most recent last):
 {history}
 
-Candidate's latest answer:
+Candidate's cumulative answer to the current question:
 \"\"\"{answer}\"\"\"
 
+Nudges already given on this question: {nudges_so_far} (max allowed: 2)
 Time remaining: {time_remaining_seconds}s
 
 Return JSON in this exact shape:
 {{
-  "decision": "ask_followup" | "next_question" | "end_section",
-  "next_text": "the question to speak (or a brief closing remark if end_section)",
+  "decision": "nudge" | "ask_followup" | "next_question" | "end_section",
+  "next_text": "the line to speak (short nudge, real question, or closing remark)",
   "scores": {{"clarity": 0-10, "depth": 0-10, "correctness": 0-10, "communication": 0-10}},
   "rationale": "brief internal note"
 }}"""
@@ -171,6 +208,7 @@ async def decide_next_turn(
     seniority: str | None = None,
     focus: str | None = None,
     industry: str | None = None,
+    nudges_so_far: int = 0,
 ) -> dict:
     provider = get_llm_provider()
     history_text = "\n".join(
@@ -190,6 +228,7 @@ async def decide_next_turn(
                     resume_summary=resume_summary[:2000],
                     history=history_text[:6000],
                     answer=answer[:4000],
+                    nudges_so_far=nudges_so_far,
                     time_remaining_seconds=time_remaining_seconds,
                 ),
             },
@@ -207,7 +246,7 @@ async def decide_next_turn(
             "rationale": "fallback (LLM JSON parse failed)",
         }
     decision = data.get("decision", "next_question")
-    if decision not in ("ask_followup", "next_question", "end_section"):
+    if decision not in ("nudge", "ask_followup", "next_question", "end_section"):
         decision = "next_question"
     scores = data.get("scores") or {}
     clamped = {

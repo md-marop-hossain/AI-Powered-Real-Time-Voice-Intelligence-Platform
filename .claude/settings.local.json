@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m py_compile app/interviews/agent.py app/interviews/orchestrator.py app/interviews/websocket.py app/interviews/stt.py)"
+    ]
+  }
+}
