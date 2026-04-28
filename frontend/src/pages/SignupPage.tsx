@@ -41,11 +41,9 @@ export default function SignupPage() {
   const onSubmit = async (data: SignupForm) => {
     setLoading(true);
     try {
-      const r = await api.post("/auth/register", data);
-      setTokens(r.data.access_token, r.data.refresh_token);
-      const me = await api.get("/auth/me");
-      setUser(me.data);
-      navigate("/upload");
+      await api.post("/auth/register", data);
+      toast.success("We sent a 6-digit code to your email.");
+      navigate(`/verify-email?email=${encodeURIComponent(data.email)}`);
     } catch (e: any) {
       toast.error(e.response?.data?.detail ?? "Something interrupted us. We're looking into it.");
     } finally {

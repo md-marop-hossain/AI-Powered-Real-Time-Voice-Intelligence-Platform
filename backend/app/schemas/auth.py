@@ -53,6 +53,20 @@ class ResetPasswordRequest(BaseModel):
         return v
 
 
+class VerifyEmailRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
+class ResendOtpRequest(BaseModel):
+    email: EmailStr
+
+
+class RegisterResponse(BaseModel):
+    message: str
+    email: EmailStr
+
+
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str

@@ -2,20 +2,20 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.core.config import settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
+_ROUNDS = 12
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=_ROUNDS)).decode()
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    return bcrypt.checkpw(plain.encode(), hashed.encode())
 
 
 def create_access_token(subject: str, extra_claims: dict | None = None) -> str:
@@ -58,4 +58,15 @@ def generate_reset_token() -> tuple[str, str]:
 
 
 def verify_reset_token(raw: str, hashed: str) -> bool:
-    return pwd_context.verify(raw, hashed)
+    return verify_password(raw, hashed)
+
+
+def generate_otp() -> tuple[str, str]:
+    """Return (raw_code, hashed_code). 6-digit numeric OTP."""
+    code = f"{secrets.randbelow(1000000):06d}"
+    hashed = hash_password(code)
+    return code, hashed
+
+
+def verify_otp(raw: str, hashed: str) -> bool:
+    return verify_password(raw, hashed)
