@@ -3,13 +3,18 @@
 Protocol:
   - Client connects with ?token=<JWT> and provides the session_id in the path.
   - Server sends a JSON message:  {"type": "ai_question", "text": "..."}
-  - Server then streams audio bytes for the question's TTS.
+    OR for a soft continuation prompt: {"type": "ai_nudge", "text": "..."}
+    (a nudge is conversational glue — the client plays its audio but does NOT
+    create a new turn entry in the conversation log).
+  - Server then streams audio bytes for the line's TTS.
   - Server sends                  {"type": "ai_audio_end"}
   - Client streams 16kHz mono PCM little-endian audio frames as binary messages.
   - When client wants to signal end-of-speech early, send {"type": "end_speech"}.
   - Client may send {"type": "end_session"} to terminate the interview.
-  - Server emits {"type": "transcript", "text": "..."} on final transcripts.
-  - Then sends {"type": "ai_question"...} again, etc., until the orchestrator ends.
+  - Server emits {"type": "transcript", "text": "..."} on each committed
+    utterance (Deepgram UtteranceEnd). The client APPENDS each transcript onto
+    the current turn's answer — across nudges, the answer accumulates.
+  - Then sends another ai_question / ai_nudge, etc., until the orchestrator ends.
 """
 
 from __future__ import annotations
@@ -87,9 +92,17 @@ async def interview_ws(
 
         send_lock = asyncio.Lock()
 
-        async def speak(text: str) -> None:
+        async def speak(text: str, *, is_nudge: bool = False) -> None:
+            """Send a JSON header followed by streamed TTS audio.
+
+            For real questions/follow-ups we send `ai_question` so the client
+            adds a numbered turn to the conversation log. For soft nudges we
+            send `ai_nudge` instead — the client plays the audio but does NOT
+            create a new turn, since the nudge is glue, not a question.
+            """
+            header = {"type": "ai_nudge" if is_nudge else "ai_question", "text": text}
             async with send_lock:
-                await websocket.send_json({"type": "ai_question", "text": text})
+                await websocket.send_json(header)
                 try:
                     async for chunk in stream_tts(text):
                         await websocket.send_bytes(chunk)
@@ -149,7 +162,7 @@ async def interview_ws(
                 result = await orch.submit_answer(transcript)
                 next_text = result.get("next_text") or ""
                 if next_text:
-                    await speak(next_text)
+                    await speak(next_text, is_nudge=bool(result.get("is_nudge")))
                 async with send_lock:
                     await websocket.send_json({
                         "type": "time_remaining",

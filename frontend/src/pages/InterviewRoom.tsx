@@ -65,6 +65,23 @@ export default function InterviewRoom() {
 
   const { analyser } = useMicStream(sendFrame, micEnabled);
 
+  // Auto-scroll: follow the conversation as new turns, interim transcripts,
+  // and committed answers land. We wait one animation frame so the new DOM
+  // node is laid out, then smooth-scroll the window to the bottom of the page.
+  const lastTurn = turns[turns.length - 1];
+  const lastAnswer = lastTurn?.answer ?? "";
+  const lastInterim = lastTurn?.interim ?? "";
+  useEffect(() => {
+    if (turns.length === 0) return;
+    const id = window.requestAnimationFrame(() => {
+      window.scrollTo({
+        top: document.documentElement.scrollHeight,
+        behavior: "smooth",
+      });
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [turns.length, lastAnswer, lastInterim]);
+
   // Banners — five-minute toast and one-minute banner.
   const lastBannerRef = useRef<number | null>(null);
   useEffect(() => {
@@ -126,6 +143,15 @@ export default function InterviewRoom() {
               setAskedDuration(null);
               break;
             }
+            case "ai_nudge": {
+              // Soft continuation prompt: play audio, but do NOT add a new turn
+              // — a nudge is glue, not a question. The candidate's next
+              // utterance will append onto the current turn's answer.
+              setAiSpeaking(true);
+              setAiThinking(false);
+              setUserSpeaking(false);
+              break;
+            }
             case "ai_audio_end":
               await player.flush();
               setAiSpeaking(false);
@@ -134,7 +160,7 @@ export default function InterviewRoom() {
               );
               setTurns((prev) =>
                 prev.map((t, i) =>
-                  i === prev.length - 1 && !t.answer
+                  i === prev.length - 1
                     ? { ...t, status: "listening" }
                     : t,
                 ),
@@ -144,7 +170,7 @@ export default function InterviewRoom() {
               setUserSpeaking(true);
               setTurns((prev) =>
                 prev.map((t, i) =>
-                  i === prev.length - 1 && !t.answer
+                  i === prev.length - 1
                     ? { ...t, status: "speaking" }
                     : t,
                 ),
@@ -153,7 +179,7 @@ export default function InterviewRoom() {
             case "user_interim":
               setTurns((prev) =>
                 prev.map((t, i) =>
-                  i === prev.length - 1 && !t.answer
+                  i === prev.length - 1
                     ? { ...t, interim: msg.text, status: "speaking" }
                     : t,
                 ),
@@ -163,7 +189,7 @@ export default function InterviewRoom() {
               setUserSpeaking(false);
               setTurns((prev) =>
                 prev.map((t, i) =>
-                  i === prev.length - 1 && !t.answer
+                  i === prev.length - 1
                     ? { ...t, status: "thinking" }
                     : t,
                 ),
@@ -173,10 +199,15 @@ export default function InterviewRoom() {
               setUserSpeaking(false);
               setTurns((prev) =>
                 prev.map((t, i) =>
-                  i === prev.length - 1 && !t.answer
+                  i === prev.length - 1
                     ? {
                         ...t,
-                        answer: msg.text,
+                        // Across nudges, multiple committed utterances land
+                        // on the same turn — append rather than overwrite so
+                        // the candidate's growing answer reads as one.
+                        answer: t.answer
+                          ? `${t.answer} ${msg.text}`.trim()
+                          : msg.text,
                         interim: undefined,
                         status: "answered",
                       }
