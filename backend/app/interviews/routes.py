@@ -40,7 +40,14 @@ async def start_session(
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
 
-    plan = await generate_question_plan(body.role, body.duration_minutes, resume.parsed)
+    plan = await generate_question_plan(
+        role=body.role,
+        duration_minutes=body.duration_minutes,
+        parsed_resume=resume.parsed,
+        seniority=body.seniority,
+        focus=body.focus,
+        industry=body.industry,
+    )
     if not plan:
         raise HTTPException(status_code=502, detail="Failed to generate interview plan")
 
@@ -48,6 +55,9 @@ async def start_session(
         user_id=current_user.id,
         resume_id=resume.id,
         role=body.role,
+        seniority=body.seniority,
+        focus=body.focus,
+        industry=body.industry,
         duration_minutes=body.duration_minutes,
         status=SessionStatus.pending,
         questions_plan={"questions": plan},

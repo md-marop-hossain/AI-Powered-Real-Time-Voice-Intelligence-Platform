@@ -103,6 +103,10 @@ class SessionOrchestrator:
                 history=self.history,
                 answer=transcript,
                 time_remaining_seconds=time_left,
+                role=self.session.role,
+                seniority=self.session.seniority,
+                focus=self.session.focus,
+                industry=self.session.industry,
             )
             # Score current turn.
             self.current_turn.scores = decision.get("scores")
