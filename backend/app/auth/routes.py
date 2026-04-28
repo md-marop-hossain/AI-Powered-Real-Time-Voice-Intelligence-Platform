@@ -25,6 +25,7 @@ from app.models.email_verification_token import EmailVerificationToken
 from app.models.password_reset_token import PasswordResetToken
 from app.models.user import AuthProvider, User
 from app.schemas.auth import (
+    ChangePasswordRequest,
     ForgotPasswordRequest,
     GoogleLoginRequest,
     LoginRequest,
@@ -34,6 +35,7 @@ from app.schemas.auth import (
     ResendOtpRequest,
     ResetPasswordRequest,
     TokenResponse,
+    UpdateProfileRequest,
     UserResponse,
     VerifyEmailRequest,
 )
@@ -296,3 +298,39 @@ async def reset_password(
 @router.get("/me", response_model=UserResponse)
 async def me(current_user: CurrentUser) -> UserResponse:
     return UserResponse.model_validate(current_user)
+
+
+@router.patch("/me", response_model=UserResponse)
+async def update_me(
+    body: UpdateProfileRequest, current_user: CurrentUser, db: DbSession
+) -> UserResponse:
+    current_user.full_name = body.full_name.strip()
+    await db.commit()
+    await db.refresh(current_user)
+    return UserResponse.model_validate(current_user)
+
+
+@router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("5/minute")
+async def change_password(
+    request: Request,
+    body: ChangePasswordRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> None:
+    if not current_user.password_hash:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This account doesn't have a password set yet. "
+                "Use the 'Forgot password' flow on the sign-in page to set one."
+            ),
+        )
+    if not verify_password(body.current_password, current_user.password_hash):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    if body.current_password == body.new_password:
+        raise HTTPException(
+            status_code=400, detail="New password must be different from the current one"
+        )
+    current_user.password_hash = hash_password(body.new_password)
+    await db.commit()

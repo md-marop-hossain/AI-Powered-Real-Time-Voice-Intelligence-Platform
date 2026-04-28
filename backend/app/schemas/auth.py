@@ -67,6 +67,24 @@ class RegisterResponse(BaseModel):
     email: EmailStr
 
 
+class UpdateProfileRequest(BaseModel):
+    full_name: str = Field(min_length=1, max_length=255)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        if not PASSWORD_RE.match(v):
+            raise ValueError(
+                "Password must be at least 8 characters and contain upper, lower, and digit"
+            )
+        return v
+
+
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
