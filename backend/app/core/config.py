@@ -32,8 +32,16 @@ class Settings(BaseSettings):
 
     # --- Speech services ---
     DEEPGRAM_API_KEY: str = ""
+
+    # TTS provider: "elevenlabs" or "openai"
+    TTS_PROVIDER: Literal["elevenlabs", "openai"] = "elevenlabs"
+
     ELEVENLABS_API_KEY: str = ""
     ELEVENLABS_VOICE_ID: str = "21m00Tcm4TlvDq8ikWAM"
+
+    # OpenAI TTS (used when TTS_PROVIDER=openai)
+    OPENAI_TTS_MODEL: str = "tts-1"  # or "tts-1-hd" for higher quality
+    OPENAI_TTS_VOICE: str = "alloy"  # alloy, echo, fable, onyx, nova, shimmer
 
     # --- Google OAuth ---
     GOOGLE_CLIENT_ID: str = ""
