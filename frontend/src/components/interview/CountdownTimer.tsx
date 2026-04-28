@@ -8,6 +8,9 @@ interface Props {
   className?: string;
   /** Announce minute changes via aria-live. */
   announce?: boolean;
+  /** When true, stop the local tick. Used after the session has ended so the
+   *  digits hold at whatever value they had at termination. */
+  frozen?: boolean;
 }
 
 /**
@@ -16,7 +19,7 @@ interface Props {
  * across above the timer (controlled by parent via the `accentLine` prop on the
  * caller side). This component focuses on the digits and color blend only.
  */
-export function CountdownTimer({ seconds, size = "lg", className, announce }: Props) {
+export function CountdownTimer({ seconds, size = "lg", className, announce, frozen }: Props) {
   const [tick, setTick] = useState(seconds);
   const lastUpdate = useRef<number>(performance.now());
 
@@ -25,16 +28,17 @@ export function CountdownTimer({ seconds, size = "lg", className, announce }: Pr
     lastUpdate.current = performance.now();
   }, [seconds]);
 
-  // Local tick to keep digits moving between server updates.
+  // Local tick to keep digits moving between server updates. When frozen
+  // (session ended) we skip the interval so the displayed value holds.
   useEffect(() => {
-    if (tick === null) return;
+    if (tick === null || frozen) return;
     const id = setInterval(() => {
       const dt = (performance.now() - lastUpdate.current) / 1000;
       const next = Math.max(0, (seconds ?? 0) - Math.floor(dt));
       setTick(next);
     }, 1000);
     return () => clearInterval(id);
-  }, [seconds, tick]);
+  }, [seconds, tick, frozen]);
 
   const announceMinute = useRef<number | null>(null);
   useEffect(() => {
