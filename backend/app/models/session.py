@@ -35,6 +35,9 @@ class Session(Base):
         nullable=True,
     )
     role: Mapped[str] = mapped_column(String(255), nullable=False)
+    seniority: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    focus: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    industry: Mapped[str | None] = mapped_column(String(128), nullable=True)
     duration_minutes: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
     status: Mapped[SessionStatus] = mapped_column(
         Enum(SessionStatus, name="session_status"),

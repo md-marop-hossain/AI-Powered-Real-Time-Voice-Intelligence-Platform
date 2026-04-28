@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
+import { streamNdjsonUpload } from "@/lib/streaming";
+import { useAuthStore } from "@/store/auth";
 import { EditorialHeader } from "@/components/editorial/EditorialHeader";
 import { Eyebrow } from "@/components/editorial/Eyebrow";
 import { NumberedMarker } from "@/components/editorial/NumberedMarker";
@@ -11,59 +13,170 @@ import { HairlineDivider } from "@/components/editorial/HairlineDivider";
 import { EditorialButton } from "@/components/editorial/EditorialButton";
 import { EditorialInput } from "@/components/editorial/EditorialInput";
 import { LoadingLine } from "@/components/editorial/LoadingLine";
-import { ParsingReveal } from "@/components/upload/ParsingReveal";
+import { ResumeReview } from "@/components/upload/ResumeReview";
+import { ChipSelect } from "@/components/editorial/ChipSelect";
+import {
+  StageState,
+  UploadProgress,
+} from "@/components/upload/UploadProgress";
 import { easeEditorial, durations } from "@/lib/motion";
 
-type Stage = "drop" | "parsing" | "configure" | "starting";
+const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+const MAX_BYTES = 10 * 1024 * 1024;
+const ALLOWED_EXTS = [".pdf", ".docx", ".txt"];
+const ALLOWED_TYPES = new Set([
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "text/plain",
+]);
 
-interface ParsedResume {
-  id: string;
-  parsed: {
-    full_name?: string | null;
-    title?: string | null;
-    skills?: string[];
-    experience?: { company?: string; role?: string }[];
-    projects?: { name?: string }[];
-  } | null;
+type Phase = "drop" | "processing" | "review" | "configure" | "starting";
+
+type Seniority = "fresher" | "junior" | "mid" | "senior" | "staff" | "manager";
+type Focus = "mixed" | "technical" | "behavioral" | "system_design";
+
+const SENIORITY_OPTIONS: { value: Seniority; label: string; hint: string }[] = [
+  { value: "fresher", label: "FRESHER", hint: "0 years — fundamentals and learning aptitude." },
+  { value: "junior", label: "JUNIOR", hint: "1–2 years — solid basics, simple ownership." },
+  { value: "mid", label: "MID-LEVEL", hint: "3–5 years — applied trade-offs and project depth." },
+  { value: "senior", label: "SENIOR", hint: "5–8 years — leadership, scoping, complex systems." },
+  { value: "staff", label: "STAFF / PRINCIPAL", hint: "8+ years — strategy, ambiguity, organisational leverage." },
+  { value: "manager", label: "MANAGER", hint: "Mix of technical fluency and people leadership." },
+];
+
+const FOCUS_OPTIONS: { value: Focus; label: string; hint: string }[] = [
+  { value: "mixed", label: "MIXED", hint: "Balanced: intro, resume, technical, behavioural, closing." },
+  { value: "technical", label: "TECHNICAL", hint: "Language depth, algorithms, debugging, applied problem-solving." },
+  { value: "behavioral", label: "BEHAVIOURAL", hint: "STAR scenarios — ownership, conflict, growth, collaboration." },
+  { value: "system_design", label: "SYSTEM DESIGN", hint: "Open-ended architecture sized to seniority." },
+];
+
+interface ParsedFields {
+  full_name?: string | null;
+  title?: string | null;
+  skills?: string[];
+  experience?: { company?: string; role?: string }[];
+  projects?: { name?: string }[];
+  education?: { institution?: string }[];
 }
 
-const MAX_BYTES = 5 * 1024 * 1024;
+interface ResumePayload {
+  id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  parsed: ParsedFields | null;
+  created_at: string;
+}
+
+interface StreamEvent {
+  stage: StageState["stage"];
+  progress: number;
+  message: string;
+  warning?: string;
+  size_bytes?: number;
+  filename?: string;
+  word_count?: number;
+  page_count?: number;
+  quality?: string;
+  parsed?: ParsedFields;
+  elapsed_seconds?: number;
+  resume?: ResumePayload;
+}
 
 export default function UploadPage() {
   const navigate = useNavigate();
-  const [stage, setStage] = useState<Stage>("drop");
+  const token = useAuthStore((s) => s.accessToken);
+
+  const [phase, setPhase] = useState<Phase>("drop");
   const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [resume, setResume] = useState<ParsedResume | null>(null);
+  const [resume, setResume] = useState<ResumePayload | null>(null);
+  const [parsed, setParsed] = useState<ParsedFields | null>(null);
   const [visibleSteps, setVisibleSteps] = useState(0);
-  const [role, setRole] = useState("Software Engineer · Senior");
+  const [role, setRole] = useState("Software Engineer");
+  const [seniority, setSeniority] = useState<Seniority>("mid");
+  const [focus, setFocus] = useState<Focus>("mixed");
+  const [industry, setIndustry] = useState("");
   const [duration, setDuration] = useState(20);
 
+  const [stage, setStage] = useState<StageState>({
+    stage: "uploading",
+    progress: 0,
+    message: "",
+  });
+  const [uploadPct] = useState(0); // server doesn't currently report incremental upload; reserved
+
+  const validate = (chosen: File): string | null => {
+    if (chosen.size > MAX_BYTES) return "That file is over 10 MB. Please upload a smaller copy.";
+    if (chosen.size === 0) return "That file appears to be empty.";
+    const lowerName = chosen.name.toLowerCase();
+    const okExt = ALLOWED_EXTS.some((e) => lowerName.endsWith(e));
+    const okType = ALLOWED_TYPES.has(chosen.type);
+    if (!okExt && !okType) return "Please upload a PDF, DOCX, or TXT file.";
+    return null;
+  };
+
   const handleFile = async (chosen: File) => {
-    if (chosen.size > MAX_BYTES) {
-      toast.error("That file is over 5 MB. Please upload a smaller copy.");
+    const err = validate(chosen);
+    if (err) {
+      toast.error(err);
       return;
     }
     setFile(chosen);
-    setStage("parsing");
+    setResume(null);
+    setParsed(null);
     setVisibleSteps(0);
+    setStage({
+      stage: "uploading",
+      progress: 0,
+      message: `Sending ${chosen.name}…`,
+      filename: chosen.name,
+      sizeBytes: chosen.size,
+    });
+    setPhase("processing");
 
     const fd = new FormData();
     fd.append("file", chosen);
+
     try {
-      const r = await api.post<ParsedResume>("/resumes", fd, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
-      setResume(r.data);
-      // Reveal each parsed field one by one.
-      for (let i = 1; i <= 5; i++) {
-        await new Promise((res) => setTimeout(res, 350));
-        setVisibleSteps(i);
+      const stream = streamNdjsonUpload<StreamEvent>(
+        `${API_URL}/api/v1/resumes/process`,
+        fd,
+        { token },
+      );
+      for await (const ev of stream) {
+        if (ev.stage === "error") {
+          setStage((s) => ({
+            ...s,
+            stage: "error",
+            error: ev.message || "Something went wrong.",
+            message: ev.message,
+          }));
+          return;
+        }
+
+        setStage((s) => ({
+          ...s,
+          stage: ev.stage,
+          progress: ev.progress,
+          message: ev.message ?? s.message,
+          warning: ev.warning ?? s.warning,
+          sizeBytes: ev.size_bytes ?? s.sizeBytes,
+          wordCount: ev.word_count ?? s.wordCount,
+          pageCount: ev.page_count ?? s.pageCount,
+          elapsedSeconds: ev.elapsed_seconds ?? s.elapsedSeconds,
+        }));
+
+        if (ev.parsed) setParsed(ev.parsed);
+        if (ev.resume) setResume(ev.resume);
       }
-      // Stay on parsing stage; user clicks Next to advance.
     } catch (e: any) {
-      toast.error(e.response?.data?.detail ?? "We couldn't read that file.");
-      setStage("drop");
+      setStage((s) => ({
+        ...s,
+        stage: "error",
+        error: e?.message ?? "Upload failed. Check your connection and try again.",
+      }));
     }
   };
 
@@ -74,19 +187,43 @@ export default function UploadPage() {
     if (f) handleFile(f);
   };
 
+  const goToReview = useCallback(async () => {
+    setPhase("review");
+    setVisibleSteps(0);
+    for (let i = 1; i <= 6; i++) {
+      await new Promise((res) => setTimeout(res, 280));
+      setVisibleSteps(i);
+    }
+  }, []);
+
+  const retry = () => {
+    setFile(null);
+    setResume(null);
+    setParsed(null);
+    setStage({ stage: "uploading", progress: 0, message: "" });
+    setPhase("drop");
+  };
+
   const startSession = async () => {
     if (!resume) return;
-    setStage("starting");
+    if (!role.trim()) {
+      toast.error("Please enter a target position.");
+      return;
+    }
+    setPhase("starting");
     try {
       const session = await api.post("/sessions", {
         resume_id: resume.id,
-        role,
+        role: role.trim(),
+        seniority,
+        focus,
+        industry: industry.trim() || null,
         duration_minutes: duration,
       });
       navigate(`/interview/${session.data.id}`);
     } catch (e: any) {
       toast.error(e.response?.data?.detail ?? "We couldn't open the room.");
-      setStage("configure");
+      setPhase("configure");
     }
   };
 
@@ -95,7 +232,7 @@ export default function UploadPage() {
       <EditorialHeader />
       <main className="editorial-container py-16 md:py-24">
         <AnimatePresence mode="wait">
-          {stage === "drop" && (
+          {phase === "drop" && (
             <DropStage
               key="drop"
               dragOver={dragOver}
@@ -106,29 +243,99 @@ export default function UploadPage() {
             />
           )}
 
-          {stage === "parsing" && (
-            <ParsingStage
-              key="parsing"
+          {phase === "processing" && (
+            <motion.div
+              key="processing"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: durations.base, ease: easeEditorial }}
+            >
+              <div className="mb-12 flex items-center justify-between">
+                <NumberedMarker index={1} total={3} label="UPLOAD" />
+                <Eyebrow>Step 01 of 03</Eyebrow>
+              </div>
+              <UploadProgress
+                state={stage}
+                uploadProgress={uploadPct}
+                filename={file?.name ?? "résumé"}
+              />
+
+              <AnimatePresence>
+                {stage.stage === "complete" && resume && (
+                  <motion.div
+                    key="complete-cta"
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: durations.base, ease: easeEditorial, delay: 0.15 }}
+                    className="mt-12"
+                  >
+                    <HairlineDivider />
+                    <div className="mt-8 flex items-center justify-between">
+                      <Eyebrow>
+                        Done in {stage.elapsedSeconds?.toFixed(1) ?? "—"}s · Review what we found?
+                      </Eyebrow>
+                      <EditorialButton onClick={goToReview} filled arrow>
+                        REVIEW
+                      </EditorialButton>
+                    </div>
+                  </motion.div>
+                )}
+
+                {stage.stage === "error" && (
+                  <motion.div
+                    key="error-cta"
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: durations.base, ease: easeEditorial }}
+                    className="mt-12"
+                  >
+                    <HairlineDivider />
+                    <div className="mt-8 flex items-center justify-between">
+                      <Eyebrow className="text-ink-muted">
+                        Try again with a different file?
+                      </Eyebrow>
+                      <EditorialButton onClick={retry} filled arrow>
+                        TRY ANOTHER FILE
+                      </EditorialButton>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.div>
+          )}
+
+          {phase === "review" && (
+            <ReviewStage
+              key="review"
               filename={file?.name ?? ""}
-              parsed={resume?.parsed ?? null}
+              parsed={parsed}
               visibleSteps={visibleSteps}
-              onNext={() => setStage("configure")}
+              onNext={() => setPhase("configure")}
             />
           )}
 
-          {stage === "configure" && (
+          {phase === "configure" && (
             <ConfigureStage
               key="configure"
-              parsedName={resume?.parsed?.full_name ?? null}
+              parsedName={parsed?.full_name ?? null}
               role={role}
               setRole={setRole}
+              seniority={seniority}
+              setSeniority={setSeniority}
+              focus={focus}
+              setFocus={setFocus}
+              industry={industry}
+              setIndustry={setIndustry}
               duration={duration}
               setDuration={setDuration}
               onStart={startSession}
             />
           )}
 
-          {stage === "starting" && (
+          {phase === "starting" && (
             <motion.div
               key="starting"
               initial={{ opacity: 0 }}
@@ -191,12 +398,12 @@ function DropStage({ dragOver, onDragEnter, onDragLeave, onDrop, onPick }: DropS
         >
           <h1 className="text-hero text-ink">Drop your résumé.</h1>
           <p className="text-body text-ink-muted">
-            PDF or DOCX, up to 5 MB.
+            PDF, DOCX, or TXT · up to 10 MB · processed locally and privately.
           </p>
           <label className="cursor-pointer">
             <input
               type="file"
-              accept=".pdf,.docx,.txt"
+              accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
               className="sr-only"
               onChange={(e) => {
                 const f = e.target.files?.[0];
@@ -213,15 +420,15 @@ function DropStage({ dragOver, onDragEnter, onDragLeave, onDrop, onPick }: DropS
   );
 }
 
-interface ParsingStageProps {
+interface ReviewStageProps {
   filename: string;
-  parsed: ParsedResume["parsed"];
+  parsed: ParsedFields | null;
   visibleSteps: number;
   onNext: () => void;
 }
 
-function ParsingStage({ filename, parsed, visibleSteps, onNext }: ParsingStageProps) {
-  const ready = visibleSteps >= 5;
+function ReviewStage({ filename, parsed, visibleSteps, onNext }: ReviewStageProps) {
+  const ready = visibleSteps >= 6;
   return (
     <motion.section
       initial={{ opacity: 0, y: 16 }}
@@ -230,26 +437,32 @@ function ParsingStage({ filename, parsed, visibleSteps, onNext }: ParsingStagePr
       transition={{ duration: durations.base, ease: easeEditorial }}
     >
       <div className="mb-12 flex items-center justify-between">
-        <NumberedMarker index={1} total={3} label="UPLOAD" />
+        <NumberedMarker index={1} total={3} label="REVIEW" />
         <Eyebrow>{filename}</Eyebrow>
       </div>
 
-      <div className="grid gap-16 md:grid-cols-[260px_1fr]">
+      {/* Header strip */}
+      <div className="mb-12 grid gap-6 md:grid-cols-[1fr_auto] md:items-end">
         <div>
-          <Eyebrow>{ready ? "Found you." : "Reading carefully…"}</Eyebrow>
-          <p className="mt-4 text-h2 text-ink">
-            {ready
-              ? "Ready when you are."
-              : "We're studying every line of your résumé."}
+          <Eyebrow className="text-ink-muted">
+            {ready ? "Found you." : "Reading carefully…"}
+          </Eyebrow>
+          <h1 className="mt-3 font-display text-[2rem] leading-tight text-ink md:text-[2.5rem]">
+            {ready ? "Looks right?" : "Surfacing what we found."}
+          </h1>
+          <p className="mt-3 max-w-prose text-body text-ink-soft">
+            Quickly scan what the AI extracted. Open any role to see highlights, or
+            expand the skill list. Anything off? Try a different file.
           </p>
-          {!ready && (
-            <div className="mt-8 max-w-[200px]">
-              <LoadingLine width="100%" />
-            </div>
-          )}
         </div>
-        <ParsingReveal parsed={parsed} visibleSteps={visibleSteps} />
+        {!ready && (
+          <div className="max-w-[220px]">
+            <LoadingLine width="100%" />
+          </div>
+        )}
       </div>
+
+      <ResumeReview parsed={parsed} visibleSteps={visibleSteps} />
 
       <AnimatePresence>
         {ready && (
@@ -258,11 +471,11 @@ function ParsingStage({ filename, parsed, visibleSteps, onNext }: ParsingStagePr
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
             transition={{ duration: durations.base, ease: easeEditorial, delay: 0.15 }}
-            className="mt-16"
+            className="mt-20"
           >
             <HairlineDivider />
             <div className="mt-8 flex items-center justify-between">
-              <Eyebrow>Looks right? Continue to step 02.</Eyebrow>
+              <Eyebrow>Pick the role next.</Eyebrow>
               <EditorialButton onClick={onNext} filled arrow>
                 NEXT
               </EditorialButton>
@@ -278,6 +491,12 @@ interface ConfigureStageProps {
   parsedName: string | null;
   role: string;
   setRole: (v: string) => void;
+  seniority: Seniority;
+  setSeniority: (v: Seniority) => void;
+  focus: Focus;
+  setFocus: (v: Focus) => void;
+  industry: string;
+  setIndustry: (v: string) => void;
   duration: number;
   setDuration: (v: number) => void;
   onStart: () => void;
@@ -287,10 +506,19 @@ function ConfigureStage({
   parsedName,
   role,
   setRole,
+  seniority,
+  setSeniority,
+  focus,
+  setFocus,
+  industry,
+  setIndustry,
   duration,
   setDuration,
   onStart,
 }: ConfigureStageProps) {
+  const seniorityLabel = SENIORITY_OPTIONS.find((o) => o.value === seniority)?.label ?? "";
+  const focusLabel = FOCUS_OPTIONS.find((o) => o.value === focus)?.label ?? "";
+
   return (
     <motion.section
       initial={{ opacity: 0, y: 16 }}
@@ -303,28 +531,82 @@ function ConfigureStage({
         <Eyebrow>Step 02 of 03</Eyebrow>
       </div>
 
-      <div className="grid gap-16 md:grid-cols-[1fr_1fr]">
+      <div className="grid gap-16 md:grid-cols-[1fr_1.4fr]">
         <div>
           {parsedName && (
             <Eyebrow className="mb-6 block">
               Hello, {parsedName.split(" ")[0]}.
             </Eyebrow>
           )}
-          <h1 className="text-display text-ink">One question before we begin.</h1>
+          <h1 className="text-display text-ink">A few questions before we begin.</h1>
           <p className="mt-6 max-w-prose text-body text-ink-soft">
-            Choose the role you're rehearsing for. We'll tailor every question
-            to your résumé and the seniority you're aiming for.
+            Tell us what you're rehearsing for. The interviewer will calibrate
+            difficulty to your seniority and weight question types toward your focus.
           </p>
+
+          <div className="mt-10 space-y-3 border-l border-rule pl-5 text-small text-ink-muted">
+            <p>
+              <span className="font-mono text-eyebrow text-ink-muted">SUMMARY · </span>
+              <span className="text-ink">
+                {role.trim() || "Role"}
+              </span>
+              {seniorityLabel && (
+                <>
+                  {" · "}
+                  <span className="text-ink">{seniorityLabel}</span>
+                </>
+              )}
+              {focusLabel && (
+                <>
+                  {" · "}
+                  <span className="text-ink">{focusLabel}</span>
+                </>
+              )}
+              {industry.trim() && (
+                <>
+                  {" · "}
+                  <span className="text-ink">{industry.trim()}</span>
+                </>
+              )}
+              {" · "}
+              <span className="text-ink">{duration} min</span>
+            </p>
+          </div>
         </div>
 
         <div className="flex flex-col gap-10">
           <EditorialInput
-            label="Target role"
+            label="Target position"
             value={role}
             onChange={(e) => setRole(e.target.value)}
             name="role"
-            placeholder="e.g. Senior Software Engineer"
+            placeholder="e.g. Software Engineer, Product Manager, Data Scientist"
+            hint="The job title you're rehearsing for."
           />
+
+          <ChipSelect
+            label="Seniority level"
+            options={SENIORITY_OPTIONS}
+            value={seniority}
+            onChange={setSeniority}
+          />
+
+          <ChipSelect
+            label="Interview focus"
+            options={FOCUS_OPTIONS}
+            value={focus}
+            onChange={setFocus}
+          />
+
+          <EditorialInput
+            label="Industry / domain (optional)"
+            value={industry}
+            onChange={(e) => setIndustry(e.target.value)}
+            name="industry"
+            placeholder="e.g. Fintech, AI/ML, Healthcare, E-commerce"
+            hint="Helps the interviewer ground questions in real-world context."
+          />
+
           <EditorialInput
             label="Duration (minutes)"
             type="number"
@@ -334,8 +616,9 @@ function ConfigureStage({
             onChange={(e) => setDuration(Number(e.target.value))}
             name="duration"
           />
+
           <HairlineDivider />
-          <div className="flex justify-between">
+          <div className="flex items-center justify-between">
             <NumberedMarker index={3} total={3} label="BEGIN" />
             <EditorialButton onClick={onStart} filled arrow>
               I'M READY
