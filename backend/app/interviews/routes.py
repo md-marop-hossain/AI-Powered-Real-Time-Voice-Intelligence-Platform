@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import CurrentUser, DbSession
-from app.core.storage import presigned_url
+from app.core.storage import delete_object, presigned_url
 from app.interviews.agent import generate_question_plan
 from app.models.report import Report
 from app.models.resume import Resume
@@ -101,6 +101,24 @@ async def list_sessions(current_user: CurrentUser, db: DbSession) -> list[Sessio
         .order_by(Session.created_at.desc())
     )
     return [SessionResponse.model_validate(s) for s in res.scalars().all()]
+
+
+@router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_session(
+    session_id: UUID, current_user: CurrentUser, db: DbSession
+) -> None:
+    res = await db.execute(
+        select(Session)
+        .where(Session.id == session_id, Session.user_id == current_user.id)
+        .options(selectinload(Session.report))
+    )
+    session = res.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.report and session.report.pdf_key:
+        delete_object(session.report.pdf_key)
+    await db.delete(session)
+    await db.commit()
 
 
 @router.get("/{session_id}", response_model=SessionDetail)

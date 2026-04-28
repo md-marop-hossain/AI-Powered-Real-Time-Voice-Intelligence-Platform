@@ -25,6 +25,32 @@ interface MeResponse {
   created_at: string;
 }
 
+interface StatsResponse {
+  sessions_total: number;
+  sessions_completed: number;
+  total_practice_minutes: number;
+  avg_overall_score: number | null;
+  best_overall_score: number | null;
+  resumes_count: number;
+  member_since: string | null;
+  last_session_at: string | null;
+  recent_roles: string[];
+}
+
+interface ResumeRow {
+  id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  parsed: {
+    full_name?: string | null;
+    title?: string | null;
+    skills?: string[];
+    experience?: { company?: string; role?: string }[];
+  } | null;
+  created_at: string;
+}
+
 const PROVIDER_LABEL: Record<string, string> = {
   manual: "Email & password",
   google: "Google",
@@ -61,25 +87,90 @@ const passwordSchema = z
 type NameForm = z.infer<typeof nameSchema>;
 type PasswordForm = z.infer<typeof passwordSchema>;
 
+const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+
 export default function AccountPage() {
   const navigate = useNavigate();
   const { clear } = useAuthStore();
   const setUser = useAuthStore((s) => s.setUser);
 
   const [me, setMe] = useState<MeResponse | null>(null);
+  const [stats, setStats] = useState<StatsResponse | null>(null);
+  const [resumes, setResumes] = useState<ResumeRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingName, setEditingName] = useState(false);
   const [editingPassword, setEditingPassword] = useState(false);
   const [savingName, setSavingName] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [deletingResumeId, setDeletingResumeId] = useState<string | null>(null);
+  const [showDeleteAccount, setShowDeleteAccount] = useState(false);
+
+  const refreshResumes = () =>
+    api
+      .get<ResumeRow[]>("/resumes")
+      .then((r) => setResumes(r.data))
+      .catch(() => {
+        /* ignore */
+      });
+
+  const refreshStats = () =>
+    api
+      .get<StatsResponse>("/auth/me/stats")
+      .then((r) => setStats(r.data))
+      .catch(() => {
+        /* ignore */
+      });
 
   useEffect(() => {
-    api
-      .get<MeResponse>("/auth/me")
-      .then((r) => setMe(r.data))
+    Promise.allSettled([
+      api.get<MeResponse>("/auth/me").then((r) => setMe(r.data)),
+      refreshStats(),
+      refreshResumes(),
+    ])
       .catch(() => toast.error("Couldn't load your account."))
       .finally(() => setLoading(false));
   }, []);
+
+  const onDeleteResume = async (id: string, filename: string) => {
+    if (!confirm(`Delete "${filename}"? This cannot be undone.`)) return;
+    setDeletingResumeId(id);
+    try {
+      await api.delete(`/resumes/${id}`);
+      setResumes((prev) => prev.filter((r) => r.id !== id));
+      refreshStats();
+      toast.success("Résumé deleted.");
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail ?? "Couldn't delete that résumé.");
+    } finally {
+      setDeletingResumeId(null);
+    }
+  };
+
+  const onExport = async () => {
+    setExporting(true);
+    try {
+      const token = useAuthStore.getState().accessToken;
+      const r = await fetch(`${API_URL}/api/v1/auth/me/export`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!r.ok) throw new Error(`status ${r.status}`);
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `rehearsal-export-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success("Your data is downloading.");
+    } catch (e: any) {
+      toast.error("Couldn't generate export.");
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const handleSignOut = () => {
     clear();
@@ -144,6 +235,72 @@ export default function AccountPage() {
             </span>
           </div>
         </header>
+
+        {/* STATS OVERVIEW */}
+        {stats && stats.sessions_total > 0 && (
+          <section className="mb-20">
+            <div className="mb-6 flex items-baseline justify-between">
+              <Eyebrow>Practice at a glance</Eyebrow>
+              {stats.last_session_at && (
+                <Eyebrow className="text-ink-muted">
+                  LAST{" "}
+                  {new Date(stats.last_session_at)
+                    .toLocaleDateString("en-US", {
+                      month: "short",
+                      day: "numeric",
+                    })
+                    .toUpperCase()}
+                </Eyebrow>
+              )}
+            </div>
+            <HairlineDivider />
+            <div className="mt-8 grid grid-cols-2 gap-x-6 gap-y-10 md:grid-cols-4">
+              <StatCard
+                label="Sessions completed"
+                value={stats.sessions_completed.toString()}
+                hint={`${stats.sessions_total} total`}
+              />
+              <StatCard
+                label="Time practiced"
+                value={formatPracticeTime(stats.total_practice_minutes)}
+              />
+              <StatCard
+                label="Average score"
+                value={
+                  stats.avg_overall_score !== null
+                    ? stats.avg_overall_score.toFixed(1)
+                    : "—"
+                }
+                hint={
+                  stats.best_overall_score !== null
+                    ? `Best ${stats.best_overall_score.toFixed(1)}`
+                    : undefined
+                }
+              />
+              <StatCard
+                label="Résumés"
+                value={stats.resumes_count.toString()}
+              />
+            </div>
+            {stats.recent_roles.length > 0 && (
+              <div className="mt-8">
+                <Eyebrow className="mb-3 block text-ink-muted">
+                  Recent roles
+                </Eyebrow>
+                <ul className="flex flex-wrap gap-2">
+                  {stats.recent_roles.map((role) => (
+                    <li
+                      key={role}
+                      className="border border-rule px-3 py-1.5 font-mono text-eyebrow text-ink"
+                    >
+                      {role}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </section>
+        )}
 
         {/* PROFILE FIELDS */}
         <section>
@@ -284,6 +441,116 @@ export default function AccountPage() {
           </Field>
         </section>
 
+        {/* RÉSUMÉS */}
+        <section className="mt-20">
+          <div className="mb-6 flex items-baseline justify-between">
+            <Eyebrow>Your résumés</Eyebrow>
+            <Eyebrow className="text-ink-muted tabular-nums">
+              {String(resumes.length).padStart(2, "0")}
+            </Eyebrow>
+          </div>
+          <HairlineDivider />
+          {resumes.length === 0 ? (
+            <div className="mt-6 flex items-center justify-between gap-6 py-2">
+              <p className="text-body text-ink-muted">
+                You haven't uploaded a résumé yet.
+              </p>
+              <EditorialButton
+                onClick={() => navigate("/upload")}
+                tone="ink"
+                arrow
+              >
+                Upload one
+              </EditorialButton>
+            </div>
+          ) : (
+            <ul className="mt-6 divide-y divide-rule">
+              {resumes.map((r) => (
+                <li
+                  key={r.id}
+                  className="grid grid-cols-1 gap-3 py-6 md:grid-cols-[1fr_auto_auto] md:items-baseline md:gap-8"
+                >
+                  <div className="min-w-0">
+                    <p className="font-mono text-body text-ink">{r.filename}</p>
+                    <p className="mt-2 text-small text-ink-muted">
+                      {formatBytes(r.size_bytes)} ·{" "}
+                      {new Date(r.created_at).toLocaleDateString("en-US", {
+                        year: "numeric",
+                        month: "short",
+                        day: "numeric",
+                      })}
+                      {r.parsed?.full_name && (
+                        <>
+                          {" · "}
+                          <span className="text-ink">{r.parsed.full_name}</span>
+                        </>
+                      )}
+                      {r.parsed?.experience && r.parsed.experience.length > 0 && (
+                        <>
+                          {" · "}
+                          {r.parsed.experience.length} role
+                          {r.parsed.experience.length === 1 ? "" : "s"}
+                        </>
+                      )}
+                      {r.parsed?.skills && r.parsed.skills.length > 0 && (
+                        <>
+                          {" · "}
+                          {r.parsed.skills.length} skill
+                          {r.parsed.skills.length === 1 ? "" : "s"}
+                        </>
+                      )}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onDeleteResume(r.id, r.filename)}
+                    disabled={deletingResumeId === r.id}
+                    className="editorial-link font-mono text-eyebrow text-accent disabled:text-ink-muted"
+                  >
+                    {deletingResumeId === r.id ? "DELETING…" : "DELETE"}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        {/* DATA & PRIVACY */}
+        <section className="mt-20">
+          <div className="mb-6 flex items-baseline justify-between">
+            <Eyebrow>Data &amp; privacy</Eyebrow>
+          </div>
+          <HairlineDivider />
+          <div className="mt-6 grid grid-cols-1 gap-6 md:grid-cols-[1fr_auto] md:items-baseline md:gap-8 py-2">
+            <div>
+              <p className="text-body text-ink">Export your data</p>
+              <p className="mt-2 text-small text-ink-muted">
+                Downloads a JSON file with your profile, every résumé you've
+                uploaded, and every session — questions, answers, scores.
+              </p>
+            </div>
+            <EditorialButton onClick={onExport} disabled={exporting} tone="ink">
+              {exporting ? "Preparing…" : "Download .json"}
+            </EditorialButton>
+          </div>
+          <HairlineDivider />
+          <div className="mt-6 grid grid-cols-1 gap-6 md:grid-cols-[1fr_auto] md:items-baseline md:gap-8 py-2">
+            <div>
+              <p className="text-body text-accent">Delete this account</p>
+              <p className="mt-2 text-small text-ink-muted">
+                Permanently removes your profile, every résumé, every session,
+                every report. There is no undo.
+              </p>
+            </div>
+            <EditorialButton
+              onClick={() => setShowDeleteAccount(true)}
+              tone="accent"
+            >
+              Delete account
+            </EditorialButton>
+          </div>
+        </section>
+
         {/* SESSION */}
         <section className="mt-20">
           <div className="mb-6 flex items-baseline justify-between">
@@ -302,6 +569,20 @@ export default function AccountPage() {
             </EditorialButton>
           </div>
         </section>
+
+        {/* DELETE ACCOUNT MODAL */}
+        <AnimatePresence>
+          {showDeleteAccount && (
+            <DeleteAccountModal
+              isManual={isManual}
+              onClose={() => setShowDeleteAccount(false)}
+              onConfirmed={() => {
+                clear();
+                navigate("/login");
+              }}
+            />
+          )}
+        </AnimatePresence>
       </main>
     </div>
   );
@@ -377,6 +658,145 @@ function NameForm({
         </EditorialButton>
       </div>
     </form>
+  );
+}
+
+function StatCard({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+}) {
+  return (
+    <div>
+      <Eyebrow className="text-ink-muted">{label}</Eyebrow>
+      <p
+        className="mt-3 font-display text-[2.25rem] leading-none text-ink tabular-nums"
+        style={{ fontVariationSettings: '"opsz" 36' }}
+      >
+        {value}
+      </p>
+      {hint && <p className="mt-2 text-small text-ink-muted">{hint}</p>}
+    </div>
+  );
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatPracticeTime(minutes: number): string {
+  if (minutes < 60) return `${minutes}m`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
+function DeleteAccountModal({
+  isManual,
+  onClose,
+  onConfirmed,
+}: {
+  isManual: boolean;
+  onClose: () => void;
+  onConfirmed: () => void;
+}) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const requiredPhrase = "DELETE MY ACCOUNT";
+  const canSubmit = isManual
+    ? password.length > 0
+    : confirm.trim().toUpperCase() === requiredPhrase;
+
+  const submit = async () => {
+    if (!canSubmit) return;
+    setSubmitting(true);
+    try {
+      await api.delete("/auth/me", {
+        data: isManual ? { password } : { confirm: confirm.trim() },
+      });
+      toast.success("Account deleted.");
+      onConfirmed();
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail ?? "Couldn't delete the account.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: durations.base, ease: easeEditorial }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 px-4"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 8 }}
+        transition={{ duration: durations.base, ease: easeEditorial }}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-[480px] border border-rule bg-canvas p-8"
+      >
+        <Eyebrow className="text-accent">Delete account</Eyebrow>
+        <h2 className="mt-3 font-display text-[1.5rem] leading-tight text-ink">
+          This is permanent.
+        </h2>
+        <p className="mt-3 text-body text-ink-soft">
+          Every résumé, session, and report tied to this account will be removed
+          from our servers. We can't recover it later.
+        </p>
+
+        <div className="mt-8">
+          {isManual ? (
+            <EditorialInput
+              label="Confirm with your password"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              name="confirm-password"
+            />
+          ) : (
+            <EditorialInput
+              label={`Type "${requiredPhrase.toLowerCase()}" to confirm`}
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              name="confirm-phrase"
+              hint="Case-insensitive."
+            />
+          )}
+        </div>
+
+        <div className="mt-8 flex justify-end gap-4">
+          <EditorialButton
+            type="button"
+            onClick={onClose}
+            tone="muted"
+            disabled={submitting}
+          >
+            Cancel
+          </EditorialButton>
+          <EditorialButton
+            type="button"
+            onClick={submit}
+            tone="accent"
+            disabled={!canSubmit || submitting}
+          >
+            {submitting ? "Deleting…" : "Delete forever"}
+          </EditorialButton>
+        </div>
+      </motion.div>
+    </motion.div>
   );
 }
 

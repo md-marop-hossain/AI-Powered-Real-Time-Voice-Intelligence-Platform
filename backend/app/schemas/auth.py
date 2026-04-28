@@ -71,6 +71,11 @@ class UpdateProfileRequest(BaseModel):
     full_name: str = Field(min_length=1, max_length=255)
 
 
+class DeleteAccountRequest(BaseModel):
+    password: str | None = None  # required for manual / both auth users
+    confirm: str | None = None  # required for google-only users — must equal "DELETE MY ACCOUNT"
+
+
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(min_length=1, max_length=128)
     new_password: str = Field(min_length=8, max_length=128)

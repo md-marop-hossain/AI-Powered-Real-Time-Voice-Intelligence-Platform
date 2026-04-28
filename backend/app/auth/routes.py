@@ -1,10 +1,13 @@
+import json
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import Response
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 
 from app.auth.google import GoogleVerificationError, verify_google_id_token
 from app.core.config import settings
@@ -21,11 +24,15 @@ from app.core.security import (
     verify_password,
     verify_reset_token,
 )
+from app.core.storage import delete_object
 from app.models.email_verification_token import EmailVerificationToken
 from app.models.password_reset_token import PasswordResetToken
+from app.models.resume import Resume
+from app.models.session import Session, SessionStatus
 from app.models.user import AuthProvider, User
 from app.schemas.auth import (
     ChangePasswordRequest,
+    DeleteAccountRequest,
     ForgotPasswordRequest,
     GoogleLoginRequest,
     LoginRequest,
@@ -333,4 +340,189 @@ async def change_password(
             status_code=400, detail="New password must be different from the current one"
         )
     current_user.password_hash = hash_password(body.new_password)
+    await db.commit()
+
+
+@router.get("/me/stats")
+async def my_stats(current_user: CurrentUser, db: DbSession) -> dict:
+    """Aggregated practice metrics for the current user."""
+    sessions_q = await db.execute(
+        select(Session).where(Session.user_id == current_user.id)
+    )
+    sessions = sessions_q.scalars().all()
+
+    total = len(sessions)
+    completed = [s for s in sessions if s.status == SessionStatus.completed]
+    completed_count = len(completed)
+    total_minutes = sum(s.duration_minutes or 0 for s in completed)
+
+    overall_scores = []
+    for s in completed:
+        score = (s.final_scores or {}).get("overall_score")
+        if isinstance(score, (int, float)):
+            overall_scores.append(float(score))
+    avg_score = sum(overall_scores) / len(overall_scores) if overall_scores else None
+    best_score = max(overall_scores) if overall_scores else None
+
+    last_session_at = max(
+        (s.created_at for s in sessions), default=None
+    ) if sessions else None
+
+    resumes_count_q = await db.execute(
+        select(func.count(Resume.id)).where(Resume.user_id == current_user.id)
+    )
+    resumes_count = resumes_count_q.scalar() or 0
+
+    # Roles practiced — distinct list, most recent first.
+    roles_seen: list[str] = []
+    seen: set[str] = set()
+    for s in sorted(sessions, key=lambda s: s.created_at, reverse=True):
+        key = (s.role or "").strip()
+        if key and key.lower() not in seen:
+            seen.add(key.lower())
+            roles_seen.append(key)
+        if len(roles_seen) >= 5:
+            break
+
+    return {
+        "sessions_total": total,
+        "sessions_completed": completed_count,
+        "total_practice_minutes": total_minutes,
+        "avg_overall_score": round(avg_score, 2) if avg_score is not None else None,
+        "best_overall_score": round(best_score, 2) if best_score is not None else None,
+        "resumes_count": resumes_count,
+        "member_since": current_user.created_at.isoformat()
+        if current_user.created_at
+        else None,
+        "last_session_at": last_session_at.isoformat() if last_session_at else None,
+        "recent_roles": roles_seen,
+    }
+
+
+@router.get("/me/export")
+async def export_my_data(current_user: CurrentUser, db: DbSession) -> Response:
+    """Download every piece of user-owned data as a single JSON file."""
+    resumes_q = await db.execute(
+        select(Resume).where(Resume.user_id == current_user.id)
+    )
+    resumes = resumes_q.scalars().all()
+
+    sessions_q = await db.execute(
+        select(Session)
+        .where(Session.user_id == current_user.id)
+        .options(selectinload(Session.turns))
+    )
+    sessions = sessions_q.scalars().all()
+
+    def _provider(p):
+        return p.value if hasattr(p, "value") else p
+
+    def _status(s):
+        return s.value if hasattr(s, "value") else s
+
+    payload = {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "user": {
+            "id": str(current_user.id),
+            "email": current_user.email,
+            "full_name": current_user.full_name,
+            "auth_provider": _provider(current_user.auth_provider),
+            "email_verified": current_user.email_verified,
+            "created_at": current_user.created_at.isoformat(),
+        },
+        "resumes": [
+            {
+                "id": str(r.id),
+                "filename": r.filename,
+                "size_bytes": r.size_bytes,
+                "content_type": r.content_type,
+                "parsed": r.parsed,
+                "raw_text": r.raw_text,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in resumes
+        ],
+        "sessions": [
+            {
+                "id": str(s.id),
+                "role": s.role,
+                "seniority": s.seniority,
+                "focus": s.focus,
+                "industry": s.industry,
+                "duration_minutes": s.duration_minutes,
+                "status": _status(s.status),
+                "started_at": s.started_at.isoformat() if s.started_at else None,
+                "ended_at": s.ended_at.isoformat() if s.ended_at else None,
+                "final_scores": s.final_scores,
+                "created_at": s.created_at.isoformat(),
+                "turns": [
+                    {
+                        "index": t.index,
+                        "question": t.question,
+                        "question_kind": t.question_kind,
+                        "answer": t.answer,
+                        "scores": t.scores,
+                        "rationale": t.rationale,
+                        "asked_at": t.asked_at.isoformat() if t.asked_at else None,
+                        "answered_at": t.answered_at.isoformat()
+                        if t.answered_at
+                        else None,
+                    }
+                    for t in (s.turns or [])
+                ],
+            }
+            for s in sessions
+        ],
+    }
+
+    body = json.dumps(payload, indent=2, ensure_ascii=False)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    filename = f"rehearsal-export-{stamp}.json"
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("3/minute")
+async def delete_my_account(
+    request: Request,
+    body: DeleteAccountRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> None:
+    """Permanently delete the current user and ALL of their data."""
+    if current_user.password_hash:
+        if not body.password:
+            raise HTTPException(
+                status_code=400, detail="Password required to delete this account."
+            )
+        if not verify_password(body.password, current_user.password_hash):
+            raise HTTPException(status_code=401, detail="Password is incorrect.")
+    else:
+        if (body.confirm or "").strip().upper() != "DELETE MY ACCOUNT":
+            raise HTTPException(
+                status_code=400,
+                detail='To delete this account, type "delete my account" exactly.',
+            )
+
+    # Best-effort cleanup of object storage. DB cascade handles the rest.
+    resumes_q = await db.execute(
+        select(Resume).where(Resume.user_id == current_user.id)
+    )
+    for r in resumes_q.scalars().all():
+        delete_object(r.storage_key)
+
+    sessions_q = await db.execute(
+        select(Session)
+        .where(Session.user_id == current_user.id)
+        .options(selectinload(Session.report))
+    )
+    for s in sessions_q.scalars().all():
+        if s.report and s.report.pdf_key:
+            delete_object(s.report.pdf_key)
+
+    await db.delete(current_user)
     await db.commit()
