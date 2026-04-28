@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 
@@ -18,6 +18,14 @@ interface SessionRow {
   status: string;
   created_at: string;
   final_scores: { overall_score?: number } | null;
+}
+
+interface StatsResponse {
+  sessions_total: number;
+  sessions_completed: number;
+  total_practice_minutes: number;
+  avg_overall_score: number | null;
+  best_overall_score: number | null;
 }
 
 interface MonthGroup {
@@ -48,25 +56,56 @@ function groupByMonth(rows: SessionRow[]): MonthGroup[] {
   return Array.from(groups.values());
 }
 
+type FilterStatus = "all" | "completed" | "pending" | "in_progress";
+
 export default function DashboardPage() {
+  const navigate = useNavigate();
   const [sessions, setSessions] = useState<SessionRow[]>([]);
+  const [stats, setStats] = useState<StatsResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<FilterStatus>("all");
+  const [search, setSearch] = useState("");
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
-    api
-      .get<SessionRow[]>("/sessions")
-      .then((r) => setSessions(r.data))
+    Promise.allSettled([
+      api.get<SessionRow[]>("/sessions").then((r) => setSessions(r.data)),
+      api.get<StatsResponse>("/auth/me/stats").then((r) => setStats(r.data)),
+    ])
       .catch(() => toast.error("Something interrupted us. We're looking into it."))
       .finally(() => setLoading(false));
   }, []);
 
-  const groups = useMemo(() => groupByMonth(sessions), [sessions]);
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return sessions.filter((s) => {
+      if (filter !== "all" && s.status !== filter) return false;
+      if (q && !s.role.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [sessions, filter, search]);
+
+  const groups = useMemo(() => groupByMonth(filtered), [filtered]);
+
+  const onDelete = async (id: string) => {
+    if (!confirm("Delete this session and its report? This cannot be undone.")) return;
+    setDeletingId(id);
+    try {
+      await api.delete(`/sessions/${id}`);
+      setSessions((prev) => prev.filter((s) => s.id !== id));
+      toast.success("Session deleted.");
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail ?? "Couldn't delete that session.");
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-canvas">
       <EditorialHeader />
       <main className="editorial-container py-16 md:py-24">
-        <header className="mb-16 flex items-end justify-between">
+        <header className="mb-16 flex items-end justify-between gap-6">
           <div>
             <Eyebrow>The library of your rehearsals</Eyebrow>
             <h1 className="mt-4 text-display text-ink">Sessions</h1>
@@ -75,6 +114,33 @@ export default function DashboardPage() {
             Begin a new session <span aria-hidden="true">→</span>
           </Link>
         </header>
+
+        {/* Stats strip */}
+        {stats && stats.sessions_total > 0 && (
+          <section className="mb-16">
+            <HairlineDivider />
+            <div className="grid grid-cols-2 gap-x-6 gap-y-8 py-8 md:grid-cols-4">
+              <DashStat label="Sessions" value={stats.sessions_total.toString()} />
+              <DashStat
+                label="Completed"
+                value={stats.sessions_completed.toString()}
+              />
+              <DashStat
+                label="Avg score"
+                value={
+                  stats.avg_overall_score !== null
+                    ? stats.avg_overall_score.toFixed(1)
+                    : "—"
+                }
+              />
+              <DashStat
+                label="Practiced"
+                value={formatPracticeTime(stats.total_practice_minutes)}
+              />
+            </div>
+            <HairlineDivider />
+          </section>
+        )}
 
         {loading ? (
           <div className="py-32">
@@ -87,70 +153,165 @@ export default function DashboardPage() {
             to="/upload"
           />
         ) : (
-          <div className="space-y-20">
-            {groups.map((g, i) => (
-              <motion.section
-                key={g.monthKey}
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{
-                  duration: durations.base,
-                  ease: easeEditorial,
-                  delay: 0.05 * i,
-                }}
-              >
-                <div className="mb-6 flex items-end justify-between">
-                  <Eyebrow>Sessions</Eyebrow>
-                  <Eyebrow>{g.monthLabel}</Eyebrow>
-                </div>
-                <HairlineDivider strong />
-                <ol>
-                  {g.rows.map((row) => (
-                    <SessionRowItem key={row.id} row={row} />
-                  ))}
-                </ol>
-              </motion.section>
-            ))}
-          </div>
+          <>
+            {/* Filter / search */}
+            <div className="mb-10 flex flex-wrap items-center justify-between gap-4">
+              <ul className="flex flex-wrap gap-2">
+                {(["all", "completed", "in_progress", "pending"] as FilterStatus[]).map(
+                  (k) => {
+                    const isActive = filter === k;
+                    const count =
+                      k === "all"
+                        ? sessions.length
+                        : sessions.filter((s) => s.status === k).length;
+                    return (
+                      <li key={k}>
+                        <button
+                          type="button"
+                          onClick={() => setFilter(k)}
+                          className={
+                            isActive
+                              ? "border border-ink bg-ink px-3 py-1.5 font-mono text-eyebrow text-canvas"
+                              : "border border-rule bg-canvas px-3 py-1.5 font-mono text-eyebrow text-ink hover:border-ink"
+                          }
+                        >
+                          {k.replace("_", " ").toUpperCase()} · {count}
+                        </button>
+                      </li>
+                    );
+                  },
+                )}
+              </ul>
+              <input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search by role…"
+                className="editorial-input w-full max-w-[260px]"
+                aria-label="Filter sessions by role"
+              />
+            </div>
+
+            {filtered.length === 0 ? (
+              <p className="py-16 text-center text-body text-ink-muted">
+                No sessions match that filter.
+              </p>
+            ) : (
+              <div className="space-y-20">
+                {groups.map((g, i) => (
+                  <motion.section
+                    key={g.monthKey}
+                    initial={{ opacity: 0, y: 12 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{
+                      duration: durations.base,
+                      ease: easeEditorial,
+                      delay: 0.05 * i,
+                    }}
+                  >
+                    <div className="mb-6 flex items-end justify-between">
+                      <Eyebrow>Sessions</Eyebrow>
+                      <Eyebrow>{g.monthLabel}</Eyebrow>
+                    </div>
+                    <HairlineDivider strong />
+                    <ol>
+                      {g.rows.map((row) => (
+                        <SessionRowItem
+                          key={row.id}
+                          row={row}
+                          deleting={deletingId === row.id}
+                          onOpen={() => navigate(`/sessions/${row.id}/report`)}
+                          onDelete={() => onDelete(row.id)}
+                        />
+                      ))}
+                    </ol>
+                  </motion.section>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </main>
     </div>
   );
 }
 
-function SessionRowItem({ row }: { row: SessionRow }) {
+function SessionRowItem({
+  row,
+  deleting,
+  onOpen,
+  onDelete,
+}: {
+  row: SessionRow;
+  deleting: boolean;
+  onOpen: () => void;
+  onDelete: () => void;
+}) {
   const number = row.id.slice(0, 3).toUpperCase();
   const score = row.final_scores?.overall_score ?? null;
-
   return (
     <li>
-      <Link
-        to={`/sessions/${row.id}/report`}
-        className="group grid grid-cols-[80px_1fr_auto_24px] items-baseline gap-6 py-6 transition-colors duration-base ease-editorial hover:bg-canvas-elevated"
-      >
-        <span className="font-mono text-small text-ink-muted tabular-nums">
+      <div className="group grid grid-cols-[80px_1fr_auto_auto_auto] items-baseline gap-6 py-6 transition-colors duration-base ease-editorial hover:bg-canvas-elevated">
+        <button
+          type="button"
+          onClick={onOpen}
+          className="text-left font-mono text-small text-ink-muted tabular-nums"
+        >
           {number}
-        </span>
-        <span className="text-body text-ink">
+        </button>
+        <button type="button" onClick={onOpen} className="text-left text-body text-ink">
           {row.role}
           <span className="ml-3 font-mono text-eyebrow text-ink-muted">
-            · {row.duration_minutes} MIN
+            · {row.duration_minutes} MIN · {row.status.replace("_", " ").toUpperCase()}
           </span>
-        </span>
-        <span
+        </button>
+        <button
+          type="button"
+          onClick={onOpen}
           className="font-display text-h2 text-ink transition-colors duration-base ease-editorial group-hover:text-accent"
           style={{ fontVariationSettings: '"opsz" 36' }}
         >
           {score !== null ? score.toFixed(1) : "—"}
-        </span>
-        <span
+        </button>
+        <button
+          type="button"
+          onClick={onDelete}
+          disabled={deleting}
+          className="editorial-link font-mono text-eyebrow text-ink-muted hover:text-accent disabled:text-ink-muted"
+        >
+          {deleting ? "DELETING…" : "DELETE"}
+        </button>
+        <button
+          type="button"
+          onClick={onOpen}
           aria-hidden="true"
           className="text-ink transition-transform duration-base ease-editorial group-hover:translate-x-2 group-hover:text-accent"
         >
           →
-        </span>
-      </Link>
+        </button>
+      </div>
       <HairlineDivider />
     </li>
   );
+}
+
+function DashStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <Eyebrow className="text-ink-muted">{label}</Eyebrow>
+      <p
+        className="mt-3 font-display text-[2rem] leading-none text-ink tabular-nums"
+        style={{ fontVariationSettings: '"opsz" 36' }}
+      >
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function formatPracticeTime(minutes: number): string {
+  if (minutes < 60) return `${minutes}m`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }

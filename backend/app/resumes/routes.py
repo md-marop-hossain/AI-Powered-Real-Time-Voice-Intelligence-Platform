@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
 from app.core.dependencies import CurrentUser, DbSession
-from app.core.storage import upload_bytes
+from app.core.storage import delete_object, upload_bytes
 from app.models.resume import Resume
 from app.resumes.parser import (
     ResumeParseError,
@@ -323,3 +323,18 @@ async def list_resumes(current_user: CurrentUser, db: DbSession) -> list[ResumeR
         select(Resume).where(Resume.user_id == current_user.id).order_by(Resume.created_at.desc())
     )
     return [ResumeResponse.model_validate(r) for r in result.scalars().all()]
+
+
+@router.delete("/{resume_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_resume(
+    resume_id: UUID, current_user: CurrentUser, db: DbSession
+) -> None:
+    result = await db.execute(
+        select(Resume).where(Resume.id == resume_id, Resume.user_id == current_user.id)
+    )
+    resume = result.scalar_one_or_none()
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    delete_object(resume.storage_key)
+    await db.delete(resume)
+    await db.commit()
