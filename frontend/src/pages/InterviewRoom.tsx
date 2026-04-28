@@ -50,6 +50,10 @@ export default function InterviewRoom() {
   const [ended, setEnded] = useState(false);
   const [showOneMinBanner, setShowOneMinBanner] = useState(false);
   const [resumeContext] = useState<string[]>([]);
+  // True once the user has scrolled past the hero timer in Zone 1.
+  const [showFloatingTimer, setShowFloatingTimer] = useState(false);
+  // Two-step End-Session confirmation; protects against accidental clicks.
+  const [endConfirmOpen, setEndConfirmOpen] = useState(false);
 
   const player = useAudioPlayer();
 
@@ -81,6 +85,19 @@ export default function InterviewRoom() {
     });
     return () => window.cancelAnimationFrame(id);
   }, [turns.length, lastAnswer, lastInterim]);
+
+  // Show a small floating timer once the hero timer in Zone 1 has scrolled
+  // out of view, so the candidate always knows how much time is left.
+  useEffect(() => {
+    const onScroll = () => {
+      // Zone 1's bottom is somewhere around 280-360px depending on viewport;
+      // 240 is a safe threshold past which the big timer is no longer visible.
+      setShowFloatingTimer(window.scrollY > 240);
+    };
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   // Banners — five-minute toast and one-minute banner.
   const lastBannerRef = useRef<number | null>(null);
@@ -254,9 +271,19 @@ export default function InterviewRoom() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preflightDone, sessionId, token]);
 
-  const endSession = useCallback(() => {
+  const requestEndSession = useCallback(() => {
+    if (ended) return;
+    setEndConfirmOpen(true);
+  }, [ended]);
+
+  const confirmEndSession = useCallback(() => {
     wsRef.current?.send(JSON.stringify({ type: "end_session" }));
     setMicEnabled(false);
+    setEndConfirmOpen(false);
+  }, []);
+
+  const cancelEndSession = useCallback(() => {
+    setEndConfirmOpen(false);
   }, []);
 
   const skipQuestion = useCallback(() => {
@@ -309,7 +336,7 @@ export default function InterviewRoom() {
             <Eyebrow className="text-ink-muted">·</Eyebrow>
             <Eyebrow className="text-ink-muted">SOFTWARE ENGINEER MOCK</Eyebrow>
           </div>
-          <CountdownTimer seconds={timeRemaining} size="lg" announce />
+          <CountdownTimer seconds={timeRemaining} size="lg" announce frozen={ended} />
           <div className="mt-6 flex items-center justify-center gap-4 font-mono text-eyebrow text-ink-muted">
             <span className="h-px w-12 bg-rule-strong" />
             REMAINING
@@ -438,7 +465,7 @@ export default function InterviewRoom() {
               Skip question
             </EditorialButton>
             {!ended ? (
-              <EditorialButton onClick={endSession} disabled={!connected} tone="accent">
+              <EditorialButton onClick={requestEndSession} disabled={!connected} tone="accent">
                 End session
               </EditorialButton>
             ) : (
@@ -454,8 +481,87 @@ export default function InterviewRoom() {
         </section>
       </main>
 
+      {/* Floating mini-timer — appears once the hero timer is scrolled past
+          so the candidate can always see how much time is left. */}
+      <AnimatePresence>
+        {showFloatingTimer && (
+          <motion.div
+            key="floating-timer"
+            initial={{ y: -16, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: -16, opacity: 0 }}
+            transition={{ duration: durations.base, ease: easeEditorial }}
+            className="fixed right-6 top-6 z-30 flex items-center gap-3 rounded-full border border-rule bg-canvas-elevated/95 px-4 py-2 shadow-sm backdrop-blur"
+            role="status"
+          >
+            <span className="font-mono text-eyebrow text-ink-muted">
+              {ended ? "ENDED" : "REMAINING"}
+            </span>
+            <CountdownTimer
+              seconds={timeRemaining}
+              size="sm"
+              frozen={ended}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* End-Session confirmation modal — guards against accidental clicks. */}
+      <AnimatePresence>
+        {endConfirmOpen && (
+          <motion.div
+            key="end-confirm"
+            className="fixed inset-0 z-50 flex items-center justify-center"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: durations.base, ease: easeEditorial }}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="end-confirm-title"
+          >
+            <button
+              type="button"
+              aria-label="Cancel"
+              className="absolute inset-0 bg-ink/40"
+              onClick={cancelEndSession}
+            />
+            <motion.div
+              initial={{ y: 12, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 12, opacity: 0 }}
+              transition={{ duration: durations.base, ease: easeEditorial }}
+              className="relative max-w-md rounded-md border border-rule bg-canvas-elevated px-10 py-9 text-center shadow-xl"
+            >
+              <Eyebrow className="mb-4 text-ink-muted">CONFIRM</Eyebrow>
+              <h2
+                id="end-confirm-title"
+                className="font-display text-[28px] leading-snug text-ink"
+              >
+                End the session now?
+              </h2>
+              <p className="mt-4 text-body text-ink-soft">
+                Your progress is saved and you'll be taken to the report. This
+                can't be undone.
+              </p>
+              <div className="mt-8 flex items-center justify-center gap-8">
+                <EditorialButton onClick={cancelEndSession} tone="muted">
+                  Keep going
+                </EditorialButton>
+                <EditorialButton onClick={confirmEndSession} tone="accent">
+                  End session
+                </EditorialButton>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <ResumeFootnote contextLines={resumeContext} />
-      <KeyboardShortcuts onEsc={endSession} onArrowRight={skipQuestion} />
+      <KeyboardShortcuts
+        onEsc={endConfirmOpen ? cancelEndSession : requestEndSession}
+        onArrowRight={skipQuestion}
+      />
     </div>
   );
 }
