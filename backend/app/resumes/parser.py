@@ -6,7 +6,7 @@ import io
 import json
 from functools import lru_cache
 
-import fitz  # PyMuPDF
+from pypdf import PdfReader
 from docx import Document
 
 from app.core.llm_provider import JSON_RESPONSE, get_llm_provider
@@ -24,10 +24,8 @@ def extract_text(filename: str, data: bytes) -> str:
 
 
 def _extract_pdf(data: bytes) -> str:
-    parts: list[str] = []
-    with fitz.open(stream=data, filetype="pdf") as doc:
-        for page in doc:
-            parts.append(page.get_text("text"))
+    reader = PdfReader(io.BytesIO(data))
+    parts = [page.extract_text() or "" for page in reader.pages]
     return "\n".join(parts).strip()
 
 

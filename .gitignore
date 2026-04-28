@@ -1,1 +1,6 @@
-node_modules/
+# Python virtual environment
+/myenv
+
+# Node.js dependencies
+/frontend/node_modules
+node_modules

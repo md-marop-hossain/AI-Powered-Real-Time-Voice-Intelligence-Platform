@@ -9,16 +9,19 @@ from sqlalchemy import select
 from app.auth.google import GoogleVerificationError, verify_google_id_token
 from app.core.config import settings
 from app.core.dependencies import CurrentUser, DbSession
-from app.core.email import send_password_reset_email
+from app.core.email import send_otp_email, send_password_reset_email
 from app.core.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
+    generate_otp,
     generate_reset_token,
     hash_password,
+    verify_otp,
     verify_password,
     verify_reset_token,
 )
+from app.models.email_verification_token import EmailVerificationToken
 from app.models.password_reset_token import PasswordResetToken
 from app.models.user import AuthProvider, User
 from app.schemas.auth import (
@@ -27,10 +30,16 @@ from app.schemas.auth import (
     LoginRequest,
     RefreshRequest,
     RegisterRequest,
+    RegisterResponse,
+    ResendOtpRequest,
     ResetPasswordRequest,
     TokenResponse,
     UserResponse,
+    VerifyEmailRequest,
 )
+
+OTP_EXPIRE_MINUTES = 10
+OTP_MAX_ATTEMPTS = 5
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 limiter = Limiter(key_func=get_remote_address)
@@ -43,15 +52,38 @@ def _make_token_pair(user: User) -> TokenResponse:
     )
 
 
-@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+async def _issue_otp(db, user: User) -> str:
+    """Invalidate previous OTPs for the user, create a new one, return raw code."""
+    existing = await db.execute(
+        select(EmailVerificationToken).where(
+            EmailVerificationToken.user_id == user.id,
+            EmailVerificationToken.used == False,  # noqa: E712
+        )
+    )
+    for tok in existing.scalars().all():
+        tok.used = True
+
+    raw, hashed = generate_otp()
+    record = EmailVerificationToken(
+        user_id=user.id,
+        code_hash=hashed,
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=OTP_EXPIRE_MINUTES),
+    )
+    db.add(record)
+    await db.commit()
+    return raw
+
+
+@router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit("5/minute")
-async def register(request: Request, body: RegisterRequest, db: DbSession) -> TokenResponse:
-    existing = await db.execute(select(User).where(User.email == body.email.lower()))
+async def register(request: Request, body: RegisterRequest, db: DbSession) -> RegisterResponse:
+    email = body.email.lower()
+    existing = await db.execute(select(User).where(User.email == email))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Email already registered")
 
     user = User(
-        email=body.email.lower(),
+        email=email,
         password_hash=hash_password(body.password),
         full_name=body.full_name,
         auth_provider=AuthProvider.manual,
@@ -60,7 +92,80 @@ async def register(request: Request, body: RegisterRequest, db: DbSession) -> To
     db.add(user)
     await db.commit()
     await db.refresh(user)
+
+    code = await _issue_otp(db, user)
+    try:
+        await send_otp_email(user.email, code, user.full_name)
+    except Exception:
+        # Don't fail registration if SMTP is misconfigured; user can resend.
+        pass
+
+    return RegisterResponse(
+        message="A 6-digit verification code has been sent to your email.",
+        email=user.email,
+    )
+
+
+@router.post("/verify-email", response_model=TokenResponse)
+@limiter.limit("10/minute")
+async def verify_email(
+    request: Request, body: VerifyEmailRequest, db: DbSession
+) -> TokenResponse:
+    email = body.email.lower()
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid email or code")
+
+    if user.email_verified:
+        raise HTTPException(status_code=400, detail="Email already verified")
+
+    now = datetime.now(timezone.utc)
+    tok_q = await db.execute(
+        select(EmailVerificationToken)
+        .where(
+            EmailVerificationToken.user_id == user.id,
+            EmailVerificationToken.used == False,  # noqa: E712
+            EmailVerificationToken.expires_at > now,
+        )
+        .order_by(EmailVerificationToken.created_at.desc())
+    )
+    token = tok_q.scalars().first()
+    if not token:
+        raise HTTPException(status_code=400, detail="Code expired. Please request a new one.")
+
+    if token.attempts >= OTP_MAX_ATTEMPTS:
+        token.used = True
+        await db.commit()
+        raise HTTPException(status_code=400, detail="Too many attempts. Please request a new code.")
+
+    token.attempts += 1
+    if not verify_otp(body.code, token.code_hash):
+        await db.commit()
+        raise HTTPException(status_code=400, detail="Invalid code")
+
+    token.used = True
+    user.email_verified = True
+    await db.commit()
+    await db.refresh(user)
     return _make_token_pair(user)
+
+
+@router.post("/resend-otp", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("3/minute")
+async def resend_otp(request: Request, body: ResendOtpRequest, db: DbSession) -> None:
+    email = body.email.lower()
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+    # Silently succeed if user doesn't exist or is already verified — avoid enumeration.
+    if not user or user.email_verified:
+        return None
+
+    code = await _issue_otp(db, user)
+    try:
+        await send_otp_email(user.email, code, user.full_name)
+    except Exception:
+        pass
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -70,6 +175,8 @@ async def login(request: Request, body: LoginRequest, db: DbSession) -> TokenRes
     user = result.scalar_one_or_none()
     if not user or not user.password_hash or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    if not user.email_verified:
+        raise HTTPException(status_code=403, detail="email_not_verified")
     return _make_token_pair(user)
 
 

@@ -44,7 +44,19 @@ export default function LoginPage() {
       setUser(me.data);
       navigate("/dashboard");
     } catch (e: any) {
-      toast.error(e.response?.data?.detail ?? "Something interrupted us. We're looking into it.");
+      const status = e.response?.status;
+      const detail = e.response?.data?.detail;
+      if (status === 403 && detail === "email_not_verified") {
+        toast.message("Please verify your email to continue.");
+        try {
+          await api.post("/auth/resend-otp", { email: data.email });
+        } catch {
+          // ignore — verify page lets the user resend
+        }
+        navigate(`/verify-email?email=${encodeURIComponent(data.email)}`);
+        return;
+      }
+      toast.error(detail ?? "Something interrupted us. We're looking into it.");
     } finally {
       setLoading(false);
     }
