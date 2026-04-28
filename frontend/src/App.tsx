@@ -7,6 +7,7 @@ import VerifyEmailPage from "@/pages/VerifyEmailPage";
 import ForgotPasswordPage from "@/pages/ForgotPasswordPage";
 import ResetPasswordPage from "@/pages/ResetPasswordPage";
 import DashboardPage from "@/pages/DashboardPage";
+import AccountPage from "@/pages/AccountPage";
 import UploadPage from "@/pages/UploadPage";
 import InterviewRoom from "@/pages/InterviewRoom";
 import ReportPage from "@/pages/ReportPage";
@@ -27,6 +28,14 @@ export default function App() {
         element={
           <ProtectedRoute>
             <DashboardPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/account"
+        element={
+          <ProtectedRoute>
+            <AccountPage />
           </ProtectedRoute>
         }
       />
