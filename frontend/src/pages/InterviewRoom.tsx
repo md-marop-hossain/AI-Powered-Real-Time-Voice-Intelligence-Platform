@@ -15,9 +15,9 @@ import { CountdownTimer } from "@/components/interview/CountdownTimer";
 import { Waveform } from "@/components/interview/Waveform";
 import { AISpeakingIndicator } from "@/components/interview/AISpeakingIndicator";
 import {
-  LiveTranscript,
-  TranscriptLine,
-} from "@/components/interview/LiveTranscript";
+  ConversationLog,
+  ConversationTurn,
+} from "@/components/interview/ConversationLog";
 import { SessionPreflightCheck } from "@/components/interview/SessionPreflightCheck";
 import { KeyboardShortcuts } from "@/components/interview/KeyboardShortcuts";
 import { ResumeFootnote } from "@/components/interview/ResumeFootnote";
@@ -42,10 +42,11 @@ export default function InterviewRoom() {
   const [micEnabled, setMicEnabled] = useState(false);
   const [aiSpeaking, setAiSpeaking] = useState(false);
   const [aiThinking, setAiThinking] = useState(false);
+  const [userSpeaking, setUserSpeaking] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
   const [currentQ, setCurrentQ] = useState<CurrentQuestion | null>(null);
   const [askedDuration, setAskedDuration] = useState<number | null>(null);
-  const [transcriptLines, setTranscriptLines] = useState<TranscriptLine[]>([]);
+  const [turns, setTurns] = useState<ConversationTurn[]>([]);
   const [ended, setEnded] = useState(false);
   const [showOneMinBanner, setShowOneMinBanner] = useState(false);
   const [resumeContext] = useState<string[]>([]);
@@ -108,19 +109,21 @@ export default function InterviewRoom() {
             case "ai_question": {
               setAiSpeaking(true);
               setAiThinking(false);
-              const idx = (currentQ?.index ?? 0) + 1;
+              setUserSpeaking(false);
               const startedAt = performance.now();
-              setCurrentQ({ index: idx, text: msg.text, askedAt: startedAt });
+              setTurns((prev) => {
+                const idx = prev.length + 1;
+                setCurrentQ({ index: idx, text: msg.text, askedAt: startedAt });
+                return [
+                  ...prev,
+                  {
+                    index: idx,
+                    question: msg.text,
+                    status: "asking",
+                  },
+                ];
+              });
               setAskedDuration(null);
-              setTranscriptLines((t) => [
-                ...t,
-                {
-                  id: `q-${idx}-${Date.now()}`,
-                  speaker: "interviewer",
-                  text: msg.text,
-                  finalized: true,
-                },
-              ]);
               break;
             }
             case "ai_audio_end":
@@ -129,18 +132,60 @@ export default function InterviewRoom() {
               setAskedDuration(
                 currentQ ? (performance.now() - currentQ.askedAt) / 1000 : null,
               );
+              setTurns((prev) =>
+                prev.map((t, i) =>
+                  i === prev.length - 1 && !t.answer
+                    ? { ...t, status: "listening" }
+                    : t,
+                ),
+              );
+              break;
+            case "user_speech_started":
+              setUserSpeaking(true);
+              setTurns((prev) =>
+                prev.map((t, i) =>
+                  i === prev.length - 1 && !t.answer
+                    ? { ...t, status: "speaking" }
+                    : t,
+                ),
+              );
+              break;
+            case "user_interim":
+              setTurns((prev) =>
+                prev.map((t, i) =>
+                  i === prev.length - 1 && !t.answer
+                    ? { ...t, interim: msg.text, status: "speaking" }
+                    : t,
+                ),
+              );
+              break;
+            case "user_speech_ended":
+              setUserSpeaking(false);
+              setTurns((prev) =>
+                prev.map((t, i) =>
+                  i === prev.length - 1 && !t.answer
+                    ? { ...t, status: "thinking" }
+                    : t,
+                ),
+              );
               break;
             case "transcript":
+              setUserSpeaking(false);
+              setTurns((prev) =>
+                prev.map((t, i) =>
+                  i === prev.length - 1 && !t.answer
+                    ? {
+                        ...t,
+                        answer: msg.text,
+                        interim: undefined,
+                        status: "answered",
+                      }
+                    : t,
+                ),
+              );
+              break;
+            case "ai_thinking":
               setAiThinking(true);
-              setTranscriptLines((t) => [
-                ...t,
-                {
-                  id: `a-${Date.now()}`,
-                  speaker: "you",
-                  text: msg.text,
-                  finalized: true,
-                },
-              ]);
               break;
             case "time_remaining":
               setTimeRemaining(msg.seconds);
@@ -149,6 +194,7 @@ export default function InterviewRoom() {
               setEnded(true);
               setMicEnabled(false);
               setAiSpeaking(false);
+              setUserSpeaking(false);
               ws.close();
               break;
             case "error":
@@ -276,8 +322,8 @@ export default function InterviewRoom() {
           </AnimatePresence>
         </section>
 
-        {/* Zone 3 — waveform / AI indicator + live transcript */}
-        <section className="py-12">
+        {/* Zone 3 — speaking indicator (AI or user) */}
+        <section className="py-10">
           <AnimatePresence mode="wait">
             {aiSpeaking ? (
               <motion.div
@@ -305,30 +351,53 @@ export default function InterviewRoom() {
                 </div>
                 <div className="mt-4 flex items-center justify-center gap-3 font-mono text-eyebrow">
                   <span
-                    className={
-                      micEnabled
-                        ? "h-2 w-2 rounded-full bg-accent"
-                        : "h-2 w-2 rounded-full bg-ink-muted"
-                    }
+                    className={`h-2 w-2 rounded-full ${
+                      !connected
+                        ? "bg-ink-muted"
+                        : userSpeaking
+                          ? "bg-accent animate-pulse"
+                          : aiThinking
+                            ? "bg-ink animate-pulse"
+                            : micEnabled
+                              ? "bg-accent"
+                              : "bg-ink-muted"
+                    }`}
                     aria-hidden="true"
                   />
-                  <span className="text-ink-muted">
+                  <span
+                    className={
+                      userSpeaking
+                        ? "text-accent"
+                        : aiThinking
+                          ? "text-ink"
+                          : "text-ink-muted"
+                    }
+                  >
                     {!connected
                       ? "CONNECTING…"
                       : aiThinking
-                      ? "CONSIDERING YOUR ANSWER…"
-                      : micEnabled
-                      ? "RECORDING"
-                      : "MIC OFF"}
+                        ? "CONSIDERING YOUR ANSWER…"
+                        : userSpeaking
+                          ? "YOU ARE SPEAKING"
+                          : micEnabled
+                            ? "LISTENING — SPEAK NATURALLY"
+                            : "MIC OFF"}
                   </span>
-                </div>
-
-                <div className="mt-10">
-                  <LiveTranscript lines={transcriptLines} />
                 </div>
               </motion.div>
             )}
           </AnimatePresence>
+        </section>
+
+        {/* Zone 4 — conversation log (always visible) */}
+        <section className="border-t border-rule py-12">
+          <div className="mb-8 flex items-center justify-between">
+            <Eyebrow>The conversation</Eyebrow>
+            <Eyebrow className="text-ink-muted">
+              {turns.length} {turns.length === 1 ? "TURN" : "TURNS"}
+            </Eyebrow>
+          </div>
+          <ConversationLog turns={turns} />
         </section>
 
         {/* Footer actions */}

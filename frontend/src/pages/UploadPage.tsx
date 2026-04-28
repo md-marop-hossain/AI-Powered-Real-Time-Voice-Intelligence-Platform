@@ -60,8 +60,7 @@ export default function UploadPage() {
         await new Promise((res) => setTimeout(res, 350));
         setVisibleSteps(i);
       }
-      await new Promise((res) => setTimeout(res, 400));
-      setStage("configure");
+      // Stay on parsing stage; user clicks Next to advance.
     } catch (e: any) {
       toast.error(e.response?.data?.detail ?? "We couldn't read that file.");
       setStage("drop");
@@ -113,6 +112,7 @@ export default function UploadPage() {
               filename={file?.name ?? ""}
               parsed={resume?.parsed ?? null}
               visibleSteps={visibleSteps}
+              onNext={() => setStage("configure")}
             />
           )}
 
@@ -217,9 +217,11 @@ interface ParsingStageProps {
   filename: string;
   parsed: ParsedResume["parsed"];
   visibleSteps: number;
+  onNext: () => void;
 }
 
-function ParsingStage({ filename, parsed, visibleSteps }: ParsingStageProps) {
+function ParsingStage({ filename, parsed, visibleSteps, onNext }: ParsingStageProps) {
+  const ready = visibleSteps >= 5;
   return (
     <motion.section
       initial={{ opacity: 0, y: 16 }}
@@ -234,13 +236,13 @@ function ParsingStage({ filename, parsed, visibleSteps }: ParsingStageProps) {
 
       <div className="grid gap-16 md:grid-cols-[260px_1fr]">
         <div>
-          <Eyebrow>{visibleSteps < 5 ? "Reading carefully…" : "Found you."}</Eyebrow>
+          <Eyebrow>{ready ? "Found you." : "Reading carefully…"}</Eyebrow>
           <p className="mt-4 text-h2 text-ink">
-            {visibleSteps < 5
-              ? "We're studying every line of your résumé."
-              : "Ready when you are."}
+            {ready
+              ? "Ready when you are."
+              : "We're studying every line of your résumé."}
           </p>
-          {visibleSteps < 5 && (
+          {!ready && (
             <div className="mt-8 max-w-[200px]">
               <LoadingLine width="100%" />
             </div>
@@ -248,6 +250,26 @@ function ParsingStage({ filename, parsed, visibleSteps }: ParsingStageProps) {
         </div>
         <ParsingReveal parsed={parsed} visibleSteps={visibleSteps} />
       </div>
+
+      <AnimatePresence>
+        {ready && (
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: durations.base, ease: easeEditorial, delay: 0.15 }}
+            className="mt-16"
+          >
+            <HairlineDivider />
+            <div className="mt-8 flex items-center justify-between">
+              <Eyebrow>Looks right? Continue to step 02.</Eyebrow>
+              <EditorialButton onClick={onNext} filled arrow>
+                NEXT
+              </EditorialButton>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.section>
   );
 }

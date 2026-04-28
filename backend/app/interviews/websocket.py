@@ -101,9 +101,28 @@ async def interview_ws(
         pending: asyncio.Queue[str] = asyncio.Queue()
 
         async def on_final(transcript: str) -> None:
+            async with send_lock:
+                await websocket.send_json({"type": "transcript", "text": transcript})
             await pending.put(transcript)
 
-        stt = DeepgramSTT(on_final=on_final)
+        async def on_interim(transcript: str) -> None:
+            async with send_lock:
+                await websocket.send_json({"type": "user_interim", "text": transcript})
+
+        async def on_speech_started() -> None:
+            async with send_lock:
+                await websocket.send_json({"type": "user_speech_started"})
+
+        async def on_utterance_end() -> None:
+            async with send_lock:
+                await websocket.send_json({"type": "user_speech_ended"})
+
+        stt = DeepgramSTT(
+            on_final=on_final,
+            on_interim=on_interim,
+            on_speech_started=on_speech_started,
+            on_utterance_end=on_utterance_end,
+        )
         try:
             await stt.start()
         except Exception as e:
@@ -125,17 +144,20 @@ async def interview_ws(
         async def consume_transcripts():
             while not orch.ended:
                 transcript = await pending.get()
-                await websocket.send_json({"type": "transcript", "text": transcript})
+                async with send_lock:
+                    await websocket.send_json({"type": "ai_thinking"})
                 result = await orch.submit_answer(transcript)
                 next_text = result.get("next_text") or ""
                 if next_text:
                     await speak(next_text)
-                await websocket.send_json({
-                    "type": "time_remaining",
-                    "seconds": orch.time_remaining_seconds,
-                })
+                async with send_lock:
+                    await websocket.send_json({
+                        "type": "time_remaining",
+                        "seconds": orch.time_remaining_seconds,
+                    })
                 if result.get("ended"):
-                    await websocket.send_json({"type": "session_ended"})
+                    async with send_lock:
+                        await websocket.send_json({"type": "session_ended"})
                     return
 
         consumer = asyncio.create_task(consume_transcripts())
