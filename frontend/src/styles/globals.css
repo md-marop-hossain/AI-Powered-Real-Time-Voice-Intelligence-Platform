@@ -13,7 +13,9 @@ html {
 }
 
 body {
-  background: var(--canvas);
+  /* Transparent so the html canvas + the fixed gradient pseudo show
+     through. Without this, body's own bg paints over the pseudo. */
+  background: transparent;
   color: var(--ink);
   font-family: "Geist Sans", system-ui, sans-serif;
   font-size: 1.0625rem;
@@ -23,12 +25,98 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* Atmospheric gradient backdrop. Lives on a fixed pseudo-element so we can
+   slowly transform it without animating the body's own background (which
+   the page wrappers cover). The base flat --canvas stays on body; cards,
+   modals, and headers keep their solid bg-canvas reading. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: -8%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      ellipse 70% 55% at 0% 0%,
+      rgba(232, 71, 44, 0.05),
+      transparent 60%
+    ),
+    radial-gradient(
+      ellipse 70% 60% at 100% 100%,
+      rgba(180, 110, 60, 0.04),
+      transparent 65%
+    );
+  animation: bloom-drift 36s ease-in-out infinite alternate;
+  will-change: transform;
+}
+
+[data-theme="dark"] body::before {
+  background:
+    radial-gradient(
+      ellipse 75% 55% at 0% 0%,
+      rgba(255, 92, 58, 0.14),
+      transparent 55%
+    ),
+    radial-gradient(
+      ellipse 80% 65% at 100% 100%,
+      rgba(120, 70, 200, 0.12),
+      transparent 60%
+    ),
+    radial-gradient(
+      ellipse 110% 80% at 50% 50%,
+      rgba(40, 30, 60, 0.18),
+      transparent 70%
+    );
+}
+
+@keyframes bloom-drift {
+  0% {
+    transform: translate3d(0%, 0%, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(2%, -1.5%, 0) scale(1.04);
+  }
+  100% {
+    transform: translate3d(-1.5%, 2%, 0) scale(1.03);
+  }
+}
+
+/* Page wrappers use `min-h-screen bg-canvas` to fill the viewport. The
+   gradient lives behind body, so make those wrappers transparent —
+   otherwise the flat --canvas paint occludes the bloom layers. Smaller
+   surfaces (header band, cards, modals) keep their solid bg-canvas. */
+.min-h-screen.bg-canvas {
+  background-color: transparent;
+}
+
 /* Browsers paint the area outside the fullscreened element black by default.
    Force the canvas color so the interview room blends into the viewport
-   instead of showing a black border. */
+   instead of showing a black border. The fullscreened <html> also gets the
+   gradient so the interview room doesn't suddenly drop back to flat black. */
 :fullscreen,
 :-webkit-full-screen {
   background: var(--canvas);
+}
+
+[data-theme="dark"] :fullscreen,
+[data-theme="dark"] :-webkit-full-screen {
+  background:
+    radial-gradient(
+      ellipse 75% 55% at 0% 0%,
+      rgba(255, 92, 58, 0.12),
+      transparent 55%
+    ),
+    radial-gradient(
+      ellipse 80% 65% at 100% 100%,
+      rgba(120, 70, 200, 0.10),
+      transparent 60%
+    ),
+    radial-gradient(
+      ellipse 110% 80% at 50% 50%,
+      rgba(40, 30, 60, 0.18),
+      transparent 70%
+    ),
+    var(--canvas);
 }
 
 /* Editorial focus ring */
@@ -43,28 +131,40 @@ body {
   color: var(--canvas-elevated);
 }
 
-/* Editorial inputs — no rounded boxes, hairline rules */
+/* Editorial inputs — no rounded boxes, hairline rules. The bottom edge is
+   built from two stacked box-shadows: a permanent dim line + a brighter
+   line drawn from left to right on focus via background-size animation. */
 .editorial-input {
   width: 100%;
-  background: transparent;
+  background:
+    linear-gradient(to right, var(--ink), var(--ink)) no-repeat left bottom / 0%
+      1px,
+    linear-gradient(to right, var(--rule-strong), var(--rule-strong)) no-repeat
+      left bottom / 100% 1px;
   border: 0;
-  border-bottom: 1px solid var(--rule-strong);
   border-radius: 0;
   padding: 12px 0;
   color: var(--ink);
   font-family: "Geist Sans", system-ui, sans-serif;
   font-size: 1.0625rem;
   line-height: 1.4;
-  transition: border-color 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: background-size 0.45s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .editorial-input::placeholder {
   color: var(--ink-muted);
+  transition: opacity 0.3s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .editorial-input:focus {
   outline: none;
-  border-bottom-color: var(--ink);
+  background-size:
+    100% 1px,
+    100% 1px;
+}
+
+.editorial-input:focus::placeholder {
+  opacity: 0.5;
 }
 
 /* Underline-grow link */
