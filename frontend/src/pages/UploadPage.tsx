@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
@@ -30,7 +30,7 @@ const ALLOWED_TYPES = new Set([
   "text/plain",
 ]);
 
-type Phase = "drop" | "processing" | "review" | "configure" | "starting";
+type Phase = "choose" | "drop" | "processing" | "review" | "configure" | "starting";
 
 type Seniority = "fresher" | "junior" | "mid" | "senior" | "staff" | "manager";
 type Focus = "mixed" | "technical" | "behavioral" | "system_design";
@@ -88,11 +88,12 @@ export default function UploadPage() {
   const navigate = useNavigate();
   const token = useAuthStore((s) => s.accessToken);
 
-  const [phase, setPhase] = useState<Phase>("drop");
+  const [phase, setPhase] = useState<Phase>("choose");
   const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [resume, setResume] = useState<ResumePayload | null>(null);
   const [parsed, setParsed] = useState<ParsedFields | null>(null);
+  const [existingResumes, setExistingResumes] = useState<ResumePayload[] | null>(null);
   const [visibleSteps, setVisibleSteps] = useState(0);
   const [role, setRole] = useState("Software Engineer");
   const [seniority, setSeniority] = useState<Seniority>("mid");
@@ -106,6 +107,32 @@ export default function UploadPage() {
     message: "",
   });
   const [uploadPct] = useState(0); // server doesn't currently report incremental upload; reserved
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .get<ResumePayload[]>("/resumes")
+      .then((r) => {
+        if (cancelled) return;
+        setExistingResumes(r.data);
+        if (!r.data.length) setPhase("drop");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setExistingResumes([]);
+        setPhase("drop");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const useExistingResume = (r: ResumePayload) => {
+    setResume(r);
+    setParsed((r.parsed as ParsedFields | null) ?? null);
+    setFile(null);
+    setPhase("configure");
+  };
 
   const validate = (chosen: File): string | null => {
     if (chosen.size > MAX_BYTES) return "That file is over 10 MB. Please upload a smaller copy.";
@@ -249,6 +276,15 @@ export default function UploadPage() {
       <EditorialHeader />
       <main className="editorial-container py-16 md:py-24">
         <AnimatePresence mode="wait">
+          {phase === "choose" && (
+            <ChooseStage
+              key="choose"
+              resumes={existingResumes}
+              onUseExisting={useExistingResume}
+              onUploadNew={() => setPhase("drop")}
+            />
+          )}
+
           {phase === "drop" && (
             <DropStage
               key="drop"
@@ -257,6 +293,8 @@ export default function UploadPage() {
               onDragLeave={() => setDragOver(false)}
               onDrop={onDrop}
               onPick={handleFile}
+              canGoBack={(existingResumes?.length ?? 0) > 0}
+              onBack={() => setPhase("choose")}
             />
           )}
 
@@ -376,9 +414,19 @@ interface DropStageProps {
   onDragLeave: () => void;
   onDrop: (e: React.DragEvent) => void;
   onPick: (f: File) => void;
+  canGoBack?: boolean;
+  onBack?: () => void;
 }
 
-function DropStage({ dragOver, onDragEnter, onDragLeave, onDrop, onPick }: DropStageProps) {
+function DropStage({
+  dragOver,
+  onDragEnter,
+  onDragLeave,
+  onDrop,
+  onPick,
+  canGoBack,
+  onBack,
+}: DropStageProps) {
   return (
     <motion.section
       initial={{ opacity: 0, y: 16 }}
@@ -431,9 +479,126 @@ function DropStage({ dragOver, onDragEnter, onDragLeave, onDrop, onPick }: DropS
               or choose a file <span aria-hidden="true">→</span>
             </span>
           </label>
+          {canGoBack && onBack && (
+            <button
+              type="button"
+              onClick={onBack}
+              className="editorial-link mt-2 font-mono text-eyebrow text-ink-muted hover:text-ink"
+            >
+              <span aria-hidden="true">←</span> USE AN EXISTING RÉSUMÉ
+            </button>
+          )}
         </div>
       </div>
     </motion.section>
+  );
+}
+
+interface ChooseStageProps {
+  resumes: ResumePayload[] | null;
+  onUseExisting: (r: ResumePayload) => void;
+  onUploadNew: () => void;
+}
+
+function ChooseStage({ resumes, onUseExisting, onUploadNew }: ChooseStageProps) {
+  const loading = resumes === null;
+  return (
+    <motion.section
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: durations.base, ease: easeEditorial }}
+    >
+      <div className="mb-12 flex items-center justify-between">
+        <NumberedMarker index={1} total={3} label="RÉSUMÉ" />
+        <Eyebrow>Step 01 of 03</Eyebrow>
+      </div>
+
+      <div className="mb-12 grid gap-6 md:grid-cols-[1fr_auto] md:items-end">
+        <div>
+          <Eyebrow className="text-ink-muted">Pick up where you left off</Eyebrow>
+          <h1 className="mt-3 font-display text-[2rem] leading-tight text-ink md:text-[2.5rem]">
+            Use an existing résumé, or upload a new one.
+          </h1>
+          <p className="mt-3 max-w-prose text-body text-ink-soft">
+            Reusing a previously processed résumé skips parsing and gets you to the
+            interview faster.
+          </p>
+        </div>
+        <EditorialButton onClick={onUploadNew} arrow>
+          UPLOAD NEW RÉSUMÉ
+        </EditorialButton>
+      </div>
+
+      <HairlineDivider strong />
+
+      {loading ? (
+        <div className="py-16">
+          <LoadingLine />
+        </div>
+      ) : resumes.length === 0 ? (
+        <p className="py-16 text-center text-body text-ink-muted">
+          No résumés yet — upload one to begin.
+        </p>
+      ) : (
+        <ol>
+          {resumes.map((r) => (
+            <ResumeRow key={r.id} resume={r} onSelect={() => onUseExisting(r)} />
+          ))}
+        </ol>
+      )}
+    </motion.section>
+  );
+}
+
+function ResumeRow({
+  resume,
+  onSelect,
+}: {
+  resume: ResumePayload;
+  onSelect: () => void;
+}) {
+  const parsed = (resume.parsed as ParsedFields | null) ?? null;
+  const name = parsed?.full_name ?? null;
+  const title = parsed?.title ?? null;
+  const created = new Date(resume.created_at);
+  const dateLabel = created.toLocaleDateString("en", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={onSelect}
+        className="group grid w-full grid-cols-[1fr_auto_auto] items-baseline gap-6 py-6 text-left transition-colors duration-base ease-editorial hover:bg-canvas-elevated"
+      >
+        <div className="min-w-0">
+          <p className="truncate text-body text-ink">
+            {name || resume.filename}
+            {title && (
+              <span className="ml-3 text-ink-soft italic">· {title}</span>
+            )}
+          </p>
+          {name && (
+            <p className="mt-1 truncate font-mono text-eyebrow text-ink-muted">
+              {resume.filename}
+            </p>
+          )}
+        </div>
+        <span className="font-mono text-eyebrow text-ink-muted tabular-nums">
+          {dateLabel.toUpperCase()}
+        </span>
+        <span
+          aria-hidden="true"
+          className="text-ink transition-transform duration-base ease-editorial group-hover:translate-x-2 group-hover:text-accent"
+        >
+          →
+        </span>
+      </button>
+      <HairlineDivider />
+    </li>
   );
 }
 
