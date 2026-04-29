@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { Eyebrow } from "./Eyebrow";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { useAuthStore } from "@/store/auth";
 
 const navLinks = [
@@ -12,6 +14,7 @@ const navLinks = [
 export function EditorialHeader() {
   const navigate = useNavigate();
   const { user, clear } = useAuthStore();
+  const [confirmingSignOut, setConfirmingSignOut] = useState(false);
 
   const handleSignOut = () => {
     clear();
@@ -51,7 +54,7 @@ export function EditorialHeader() {
           ))}
           {user && (
             <button
-              onClick={handleSignOut}
+              onClick={() => setConfirmingSignOut(true)}
               className="editorial-link is-quiet text-ink-muted hover:text-ink"
             >
               <Eyebrow as="span">Sign out</Eyebrow>
@@ -59,6 +62,17 @@ export function EditorialHeader() {
           )}
         </nav>
       </div>
+
+      <ConfirmDialog
+        open={confirmingSignOut}
+        eyebrow="Sign out"
+        title="Sign out of this browser?"
+        body="Your transcripts and reports stay saved on your account — you can sign back in any time."
+        confirmLabel="Sign out"
+        confirmTone="ink"
+        onClose={() => setConfirmingSignOut(false)}
+        onConfirm={handleSignOut}
+      />
     </header>
   );
 }

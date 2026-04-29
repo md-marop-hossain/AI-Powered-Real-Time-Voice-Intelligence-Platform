@@ -14,6 +14,7 @@ import { HairlineDivider } from "@/components/editorial/HairlineDivider";
 import { EditorialButton } from "@/components/editorial/EditorialButton";
 import { EditorialInput } from "@/components/editorial/EditorialInput";
 import { NumberedMarker } from "@/components/editorial/NumberedMarker";
+import { ConfirmDialog } from "@/components/editorial/ConfirmDialog";
 import { easeEditorial, durations } from "@/lib/motion";
 
 interface MeResponse {
@@ -105,6 +106,8 @@ export default function AccountPage() {
   const [exporting, setExporting] = useState(false);
   const [deletingResumeId, setDeletingResumeId] = useState<string | null>(null);
   const [showDeleteAccount, setShowDeleteAccount] = useState(false);
+  const [confirmingResume, setConfirmingResume] = useState<ResumeRow | null>(null);
+  const [confirmingSignOut, setConfirmingSignOut] = useState(false);
 
   const refreshResumes = () =>
     api
@@ -132,8 +135,7 @@ export default function AccountPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  const onDeleteResume = async (id: string, filename: string) => {
-    if (!confirm(`Delete "${filename}"? This cannot be undone.`)) return;
+  const onDeleteResume = async (id: string) => {
     setDeletingResumeId(id);
     try {
       await api.delete(`/resumes/${id}`);
@@ -144,6 +146,7 @@ export default function AccountPage() {
       toast.error(e.response?.data?.detail ?? "Couldn't delete that résumé.");
     } finally {
       setDeletingResumeId(null);
+      setConfirmingResume(null);
     }
   };
 
@@ -503,7 +506,7 @@ export default function AccountPage() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => onDeleteResume(r.id, r.filename)}
+                    onClick={() => setConfirmingResume(r)}
                     disabled={deletingResumeId === r.id}
                     className="editorial-link font-mono text-eyebrow text-accent disabled:text-ink-muted"
                   >
@@ -564,7 +567,7 @@ export default function AccountPage() {
                 Your transcripts and reports stay saved on your account.
               </p>
             </div>
-            <EditorialButton onClick={handleSignOut} tone="muted">
+            <EditorialButton onClick={() => setConfirmingSignOut(true)} tone="muted">
               Sign out
             </EditorialButton>
           </div>
@@ -583,6 +586,45 @@ export default function AccountPage() {
             />
           )}
         </AnimatePresence>
+
+        {/* DELETE RÉSUMÉ MODAL */}
+        <ConfirmDialog
+          open={confirmingResume !== null}
+          eyebrow="Delete résumé"
+          title="Delete this résumé?"
+          body={
+            confirmingResume ? (
+              <>
+                <span className="font-mono text-ink">{confirmingResume.filename}</span>
+                <span className="mt-3 block text-small text-ink-muted">
+                  Existing sessions that used this résumé keep their transcripts
+                  and reports. You won't be able to start a new session from it.
+                  This cannot be undone.
+                </span>
+              </>
+            ) : null
+          }
+          confirmLabel="Delete forever"
+          loadingLabel="Deleting…"
+          confirmTone="accent"
+          loading={deletingResumeId !== null}
+          onClose={() => setConfirmingResume(null)}
+          onConfirm={() =>
+            confirmingResume && onDeleteResume(confirmingResume.id)
+          }
+        />
+
+        {/* SIGN OUT MODAL */}
+        <ConfirmDialog
+          open={confirmingSignOut}
+          eyebrow="Sign out"
+          title="Sign out of this browser?"
+          body="Your transcripts and reports stay saved on your account — you can sign back in any time."
+          confirmLabel="Sign out"
+          confirmTone="ink"
+          onClose={() => setConfirmingSignOut(false)}
+          onConfirm={handleSignOut}
+        />
       </main>
     </div>
   );
