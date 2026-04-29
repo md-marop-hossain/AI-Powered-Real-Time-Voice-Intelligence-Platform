@@ -94,7 +94,7 @@ function LandingHeader({ isAuthed }: { isAuthed: boolean }) {
 
 function Hero({ isAuthed }: { isAuthed: boolean }) {
   return (
-    <section className="editorial-container py-20 md:py-32">
+    <section className="editorial-container flex min-h-[calc(100vh-4rem)] flex-col justify-center py-16">
       <div className="grid gap-16 md:grid-cols-[1.1fr_1fr] md:items-center">
         <motion.div
           initial="initial"
@@ -117,9 +117,8 @@ function Hero({ isAuthed }: { isAuthed: boolean }) {
             }}
             className="mt-8 text-hero text-ink"
           >
-            Practice the <br />
-            conversation that <br />
-            <VermillionUnderline>changes</VermillionUnderline> everything.
+            Speak up.<br />
+            <VermillionUnderline>Get the offer.</VermillionUnderline>
           </motion.h1>
 
           <motion.p
