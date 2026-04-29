@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 
 import { Eyebrow } from "./Eyebrow";
@@ -61,7 +62,9 @@ export function ConfirmDialog({
     };
   }, [open, loading, onClose]);
 
-  return (
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
     <AnimatePresence>
       {open && (
         <motion.div
@@ -72,13 +75,13 @@ export function ConfirmDialog({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: durations.base, ease: easeEditorial }}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 px-4"
+          className="fixed inset-0 z-50 flex items-start justify-end bg-ink/40 px-4 pt-20 sm:px-8"
           onClick={loading ? undefined : onClose}
         >
           <motion.div
-            initial={{ opacity: 0, y: 12 }}
+            initial={{ opacity: 0, y: -8 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 8 }}
+            exit={{ opacity: 0, y: -8 }}
             transition={{ duration: durations.base, ease: easeEditorial }}
             onClick={(e) => e.stopPropagation()}
             className="w-full max-w-[480px] border border-rule bg-canvas p-8"
@@ -120,6 +123,7 @@ export function ConfirmDialog({
           </motion.div>
         </motion.div>
       )}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
   );
 }
