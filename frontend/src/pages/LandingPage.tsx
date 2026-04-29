@@ -7,6 +7,7 @@ import { Eyebrow } from "@/components/editorial/Eyebrow";
 import { HairlineDivider } from "@/components/editorial/HairlineDivider";
 import { NumberedMarker } from "@/components/editorial/NumberedMarker";
 import { EditorialButton } from "@/components/editorial/EditorialButton";
+import { ThemeToggle } from "@/components/editorial/ThemeToggle";
 import { VermillionUnderline } from "@/components/editorial/AuthSplit";
 import { easeEditorial, durations } from "@/lib/motion";
 import { cn } from "@/lib/utils";
@@ -82,6 +83,7 @@ function LandingHeader({ isAuthed }: { isAuthed: boolean }) {
               </Link>
             </>
           )}
+          <ThemeToggle />
         </nav>
       </div>
     </header>

@@ -13,11 +13,39 @@ interface Props {
   className?: string;
 }
 
-const COLORS = {
+// Fallback hex values, mirroring tokens.css :root. Live colors are read
+// from CSS custom properties on mount and on every `data-theme` change so
+// the orb tracks the active theme without remounting.
+const FALLBACK_COLORS = {
   ink: 0x1a1814,
   inkMuted: 0x8a8478,
   accent: 0xe8472c,
+  canvasElevated: 0xfbf8f2,
 };
+
+function parseHex(value: string): number | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  const m = trimmed.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (!m) return null;
+  let hex = m[1];
+  if (hex.length === 3) hex = hex.split("").map((c) => c + c).join("");
+  return parseInt(hex, 16);
+}
+
+function readThemeColors(): typeof FALLBACK_COLORS {
+  if (typeof document === "undefined") return FALLBACK_COLORS;
+  const css = getComputedStyle(document.documentElement);
+  return {
+    ink: parseHex(css.getPropertyValue("--ink")) ?? FALLBACK_COLORS.ink,
+    inkMuted:
+      parseHex(css.getPropertyValue("--ink-muted")) ?? FALLBACK_COLORS.inkMuted,
+    accent: parseHex(css.getPropertyValue("--accent")) ?? FALLBACK_COLORS.accent,
+    canvasElevated:
+      parseHex(css.getPropertyValue("--canvas-elevated")) ??
+      FALLBACK_COLORS.canvasElevated,
+  };
+}
 
 /**
  * 3D audio-reactive orb for the AI interviewer.
@@ -35,6 +63,7 @@ export function AIAvatar({ state, amplitude, size = 200, className }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef(state);
   const ampRef = useRef(amplitude);
+  const colorsRef = useRef(readThemeColors());
   const [webglFailed, setWebglFailed] = useState(false);
 
   // Keep refs in sync without re-mounting the WebGL context.
@@ -55,6 +84,20 @@ export function AIAvatar({ state, amplitude, size = 200, className }: Props) {
     let material: import("three").MeshBasicMaterial | null = null;
     let geometry: import("three").IcosahedronGeometry | null = null;
     let basePositions: Float32Array | null = null;
+    let innerMaterial: import("three").MeshBasicMaterial | null = null;
+
+    // Refresh palette when the theme changes (e.g. user toggles dark mode).
+    const refreshColors = () => {
+      colorsRef.current = readThemeColors();
+    };
+    let observer: MutationObserver | null = null;
+    if (typeof MutationObserver !== "undefined" && typeof document !== "undefined") {
+      observer = new MutationObserver(refreshColors);
+      observer.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ["data-theme"],
+      });
+    }
 
     (async () => {
       try {
@@ -93,7 +136,7 @@ export function AIAvatar({ state, amplitude, size = 200, className }: Props) {
         ).slice();
 
         material = new THREE.MeshBasicMaterial({
-          color: COLORS.ink,
+          color: colorsRef.current.ink,
           wireframe: true,
           transparent: true,
           opacity: 0.85,
@@ -103,13 +146,14 @@ export function AIAvatar({ state, amplitude, size = 200, className }: Props) {
         scene.add(mesh);
 
         // A subtle solid inner sphere so the wireframe reads against the canvas.
+        innerMaterial = new THREE.MeshBasicMaterial({
+          color: colorsRef.current.canvasElevated,
+          transparent: true,
+          opacity: 0.55,
+        });
         const inner = new THREE.Mesh(
           new THREE.IcosahedronGeometry(0.86, 2),
-          new THREE.MeshBasicMaterial({
-            color: 0xfbf8f2,
-            transparent: true,
-            opacity: 0.55,
-          }),
+          innerMaterial,
         );
         scene.add(inner);
 
@@ -129,17 +173,24 @@ export function AIAvatar({ state, amplitude, size = 200, className }: Props) {
           mesh.rotation.x = Math.sin(t * 0.4) * 0.18;
           inner.rotation.y -= rot * 0.012;
 
-          // Color blend.
+          // Color blend — read live from CSS vars so theme switches track.
+          const palette = colorsRef.current;
           const target =
             s === "speaking" || s === "thinking"
-              ? COLORS.accent
+              ? palette.accent
               : s === "ended"
-                ? COLORS.inkMuted
-                : COLORS.ink;
+                ? palette.inkMuted
+                : palette.ink;
           (material.color as import("three").Color).lerp(
             new THREE.Color(target),
             0.08,
           );
+          if (innerMaterial) {
+            (innerMaterial.color as import("three").Color).lerp(
+              new THREE.Color(palette.canvasElevated),
+              0.08,
+            );
+          }
 
           // Per-state displacement intensity.
           const displaceAmt =
@@ -189,9 +240,11 @@ export function AIAvatar({ state, amplitude, size = 200, className }: Props) {
     return () => {
       cancelled = true;
       cancelAnimationFrame(raf);
+      observer?.disconnect();
       try {
         if (geometry) geometry.dispose();
         if (material) material.dispose();
+        if (innerMaterial) innerMaterial.dispose();
         scene?.traverse((obj) => {
           const m = obj as import("three").Mesh;
           if (m.isMesh) {
