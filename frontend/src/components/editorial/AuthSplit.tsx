@@ -116,14 +116,19 @@ interface UnderlineProps {
   children: React.ReactNode;
 }
 
-/** A single vermillion underline accent under one word in the hero. */
+/** A single vermillion underline accent under one word in the hero.
+ *  The line draws in from the left on mount so the highlight feels
+ *  intentional rather than just static decoration. */
 export function VermillionUnderline({ children }: UnderlineProps) {
   return (
     <span className="relative inline-block">
       {children}
-      <span
+      <motion.span
         aria-hidden="true"
-        className="absolute left-0 right-0 -bottom-1 h-[2px] bg-accent"
+        className="absolute left-0 right-0 -bottom-1 h-[2px] origin-left bg-accent"
+        initial={{ scaleX: 0 }}
+        animate={{ scaleX: 1 }}
+        transition={{ duration: durations.slow, ease: easeEditorial, delay: 0.4 }}
       />
     </span>
   );
