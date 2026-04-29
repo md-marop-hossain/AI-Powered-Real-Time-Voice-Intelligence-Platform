@@ -10,6 +10,7 @@ import { Eyebrow } from "@/components/editorial/Eyebrow";
 import { HairlineDivider } from "@/components/editorial/HairlineDivider";
 import { LoadingLine } from "@/components/editorial/LoadingLine";
 import { EmptyState } from "@/components/editorial/EmptyState";
+import { ConfirmDialog } from "@/components/editorial/ConfirmDialog";
 
 interface SessionRow {
   id: string;
@@ -66,6 +67,7 @@ export default function DashboardPage() {
   const [filter, setFilter] = useState<FilterStatus>("all");
   const [search, setSearch] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState<SessionRow | null>(null);
 
   useEffect(() => {
     Promise.allSettled([
@@ -88,7 +90,6 @@ export default function DashboardPage() {
   const groups = useMemo(() => groupByMonth(filtered), [filtered]);
 
   const onDelete = async (id: string) => {
-    if (!confirm("Delete this session and its report? This cannot be undone.")) return;
     setDeletingId(id);
     try {
       await api.delete(`/sessions/${id}`);
@@ -98,6 +99,7 @@ export default function DashboardPage() {
       toast.error(e.response?.data?.detail ?? "Couldn't delete that session.");
     } finally {
       setDeletingId(null);
+      setConfirmingDelete(null);
     }
   };
 
@@ -221,7 +223,7 @@ export default function DashboardPage() {
                           row={row}
                           deleting={deletingId === row.id}
                           onOpen={() => navigate(`/sessions/${row.id}/report`)}
-                          onDelete={() => onDelete(row.id)}
+                          onDelete={() => setConfirmingDelete(row)}
                         />
                       ))}
                     </ol>
@@ -232,6 +234,37 @@ export default function DashboardPage() {
           </>
         )}
       </main>
+
+      <ConfirmDialog
+        open={confirmingDelete !== null}
+        eyebrow="Delete session"
+        title="Delete this session and its report?"
+        body={
+          confirmingDelete ? (
+            <>
+              <span className="text-ink">{confirmingDelete.role}</span>
+              {" · "}
+              {confirmingDelete.duration_minutes} min
+              {" · "}
+              {new Date(confirmingDelete.created_at).toLocaleDateString("en", {
+                day: "2-digit",
+                month: "short",
+                year: "numeric",
+              })}
+              <span className="mt-3 block text-small text-ink-muted">
+                Every question, answer and score will be removed. This cannot be
+                undone.
+              </span>
+            </>
+          ) : null
+        }
+        confirmLabel="Delete forever"
+        loadingLabel="Deleting…"
+        confirmTone="accent"
+        loading={deletingId !== null}
+        onClose={() => setConfirmingDelete(null)}
+        onConfirm={() => confirmingDelete && onDelete(confirmingDelete.id)}
+      />
     </div>
   );
 }
