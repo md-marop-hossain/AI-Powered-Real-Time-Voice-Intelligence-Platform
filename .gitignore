@@ -4,3 +4,7 @@
 # Node.js dependencies
 /frontend/node_modules
 node_modules
+
+# Claude Code local-only files
+CLAUDE.local.md
+.claude/settings.local.json
