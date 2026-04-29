@@ -108,13 +108,25 @@ async def interview_ws(
             adds a numbered turn to the conversation log. For soft nudges we
             send `ai_nudge` instead — the client plays the audio but does NOT
             create a new turn, since the nudge is glue, not a question.
+
+            The TTS stream is bounded by a hard timeout so a slow or hung
+            provider can't pin the send-lock indefinitely. That matters most
+            on the closing line: if speak() never returns, the consumer
+            never sends `session_ended` and the client hangs on the
+            interview page forever.
             """
             header = {"type": "ai_nudge" if is_nudge else "ai_question", "text": text}
             async with send_lock:
                 await websocket.send_json(header)
                 try:
-                    async for chunk in stream_tts(text):
-                        await websocket.send_bytes(chunk)
+
+                    async def _stream() -> None:
+                        async for chunk in stream_tts(text):
+                            await websocket.send_bytes(chunk)
+
+                    await asyncio.wait_for(_stream(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    log.warning("TTS stream exceeded 30s — flushing audio_end")
                 except Exception as e:
                     log.warning("TTS stream failed: %s", e)
                 await websocket.send_json({"type": "ai_audio_end"})
@@ -168,37 +180,57 @@ async def interview_ws(
             # exception escape, the consumer task ends and any future
             # transcripts pile up in the queue with no one to process them.
             # The candidate sees "CONSIDERING YOUR ANSWER…" forever. So we
-            # wrap each iteration, log, and recover.
+            # wrap each step, log, and recover. Each step (LLM, TTS, send)
+            # is independently guarded so one failure can't skip the
+            # session_ended emit on the closing turn.
             while not orch.ended:
                 transcript = await pending.get()
                 async with send_lock:
                     await websocket.send_json({"type": "ai_thinking"})
+
                 try:
                     result = await orch.submit_answer(transcript)
-                    next_text = result.get("next_text") or ""
-                    if next_text:
+                except Exception as e:
+                    log.exception("submit_answer failed: %s", e)
+                    try:
+                        async with send_lock:
+                            await websocket.send_json({"type": "ai_idle"})
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": "We hit a snag processing that — please try again.",
+                            })
+                    except Exception:
+                        pass
+                    continue
+
+                next_text = result.get("next_text") or ""
+                ended = bool(result.get("ended"))
+
+                if next_text:
+                    try:
                         await speak(next_text, is_nudge=bool(result.get("is_nudge")))
+                    except Exception as e:
+                        log.warning("speak() raised on turn close-out: %s", e)
+
+                try:
                     async with send_lock:
                         await websocket.send_json({
                             "type": "time_remaining",
                             "seconds": orch.time_remaining_seconds,
                         })
-                    if result.get("ended"):
+                except Exception as e:
+                    log.warning("time_remaining send failed: %s", e)
+
+                if ended:
+                    # Guaranteed-path emit: the client uses this to navigate
+                    # to the completion screen, so it must go out even if the
+                    # closing speak or time_remaining failed above.
+                    try:
                         async with send_lock:
                             await websocket.send_json({"type": "session_ended"})
-                        return
-                except Exception as e:
-                    # Most likely the LLM hung past its timeout, the TTS
-                    # provider 5xx'd, or the DB blipped. Tell the client to
-                    # stop showing "thinking", surface a soft error toast,
-                    # and stay in the loop so the candidate can keep going.
-                    log.exception("Turn processing failed: %s", e)
-                    async with send_lock:
-                        await websocket.send_json({"type": "ai_idle"})
-                        await websocket.send_json({
-                            "type": "error",
-                            "message": "We hit a snag processing that — please try again.",
-                        })
+                    except Exception as e:
+                        log.warning("session_ended send failed: %s", e)
+                    return
 
         consumer = asyncio.create_task(consume_transcripts())
 

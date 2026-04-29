@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
+
+log = logging.getLogger(__name__)
 
 from app.core.dependencies import CurrentUser, DbSession
 from app.core.storage import delete_object, presigned_url
@@ -166,9 +169,23 @@ async def get_report(
         from app.core.storage import upload_bytes
 
         summary = build_report_summary(session)
-        pdf_bytes = render_pdf(session, summary)
-        pdf_key = f"reports/{current_user.id}/{session.id}.pdf"
-        upload_bytes(pdf_key, pdf_bytes, content_type="application/pdf")
+        # PDF rendering can fail on Windows when WeasyPrint loads the wrong
+        # native Pango/Cairo DLLs (e.g. an old one shipped with Tesseract).
+        # The on-screen report doesn't need the PDF — only the download link
+        # does — so treat PDF generation as best-effort: persist the report
+        # without a pdf_key if it fails, and let the user retry later.
+        pdf_key: str | None = None
+        try:
+            pdf_bytes = render_pdf(session, summary)
+            pdf_key = f"reports/{current_user.id}/{session.id}.pdf"
+            upload_bytes(pdf_key, pdf_bytes, content_type="application/pdf")
+        except Exception as e:
+            log.warning(
+                "PDF rendering failed for session %s; saving report without PDF: %s",
+                session.id,
+                e,
+            )
+            pdf_key = None
         report = Report(
             session_id=session.id,
             overall_score=summary["overall_score"],
