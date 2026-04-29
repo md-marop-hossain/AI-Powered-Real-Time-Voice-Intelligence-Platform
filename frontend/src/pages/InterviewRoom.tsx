@@ -318,6 +318,12 @@ export default function InterviewRoom() {
             case "ai_thinking":
               setAiThinking(true);
               break;
+            case "ai_idle":
+              // Sent by the server when a turn-processing step failed
+              // (LLM timeout, TTS 5xx). Clears the "thinking" indicator so
+              // the candidate isn't stuck staring at three pulsing dots.
+              setAiThinking(false);
+              break;
             case "time_remaining":
               setTimeRemaining(msg.seconds);
               break;

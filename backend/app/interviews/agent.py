@@ -10,10 +10,17 @@ The plan and follow-up prompts are tailored by:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
 from app.core.llm_provider import JSON_RESPONSE, get_llm_provider
+
+# Hard ceiling on each LLM round-trip. Without this, a slow-to-respond
+# upstream (Groq / OpenAI) leaves the consumer task hanging on the await,
+# which leaves the candidate's UI stuck on "CONSIDERING YOUR ANSWER…"
+# forever. 30s is generous for a 70B model with JSON output.
+LLM_TIMEOUT_SECONDS = 30.0
 
 log = logging.getLogger(__name__)
 
@@ -129,21 +136,26 @@ FOLLOWUP_SYSTEM = (
     "to encourage the candidate to keep going on the SAME question. Use ONLY when the latest "
     "answer is genuinely a fragment (see definition) AND nudges_so_far < 2.\n"
     "- ask_followup: a real, specific clarifying or probing question on the SAME topic. Adds new "
-    "value beyond what the candidate has said. Must be a complete sentence question.\n"
+    "value beyond what the candidate has said. Must be a complete sentence question. CRITICAL: "
+    "Each follow-up must take a DIFFERENT angle than previous follow-ups on this question — a "
+    "different aspect, a smaller scope, a concrete example, a hint, or a simpler restatement. "
+    "Never just rephrase the same probe. Read the conversation history before composing.\n"
     "- next_question: move to the next planned question. Pick this when the candidate's answer is "
-    "structurally complete OR when they explicitly signal they're done with the current question "
-    "('that's it', 'you can ask another', 'I have nothing more to add', 'next question', 'move on').\n"
+    "structurally complete, when they explicitly signal they're done ('that's it', 'you can ask "
+    "another', 'I have nothing more to add', 'next question', 'move on'), OR when 2 follow-ups "
+    "on the current topic have already produced fragmentary or off-topic answers (the candidate "
+    "clearly doesn't have more depth to give — pivot don't drill).\n"
     "- end_section: end the entire interview. Pick this when planned questions are covered, time is "
     "short, OR the candidate has explicitly asked to STOP THE INTERVIEW (not just the question).\n\n"
 
-    "FRAGMENT DEFINITION — an answer is a fragment ONLY if ALL of these hold:\n"
-    "1. Fewer than ~12 meaningful (non-filler) words.\n"
-    "2. Trails off mid-thought OR is dominated by fillers / restarts ('uh', 'um', 'I, I, I', "
-    "'yeah I am'). \n"
-    "3. Contains NO explicit 'I'm done / move on / stop' signal.\n"
-    "If any check fails, the answer is NOT a fragment — pick ask_followup or next_question.\n"
-    "A multi-sentence coherent answer is NEVER a fragment, even if you'd like more depth — use "
-    "ask_followup for that.\n\n"
+    "FRAGMENT DEFINITION — an answer counts as a fragment if EITHER pattern holds:\n"
+    "A. Short fragment — Fewer than ~12 meaningful (non-filler) words AND trails off / is "
+    "dominated by fillers / restarts AND contains no explicit move-on signal.\n"
+    "B. Trailing-off ending — The answer is otherwise substantive but the FINAL clause trails "
+    "off without finishing: a repeated word at the very end ('to their desirable, desirable'), "
+    "an unfinished phrase ('and uh and uh'), or a clause that breaks off mid-syntax with no "
+    "verb / noun completion. Treat these as the candidate still composing — nudge for the rest.\n"
+    "If neither pattern holds, the answer is NOT a fragment — pick ask_followup or next_question.\n\n"
 
     "EXPLICIT SIGNALS OVERRIDE EVERYTHING:\n"
     "- 'that's it' / 'I'm done' / 'you can ask another question' / 'next question' / 'move on' "
@@ -159,6 +171,11 @@ FOLLOWUP_SYSTEM = (
 
     "NUDGE CAP: nudges_so_far is capped at 2. If nudges_so_far == 2, you MUST pick ask_followup "
     "(a focused clarification on the same topic) or next_question — NEVER nudge a third time.\n\n"
+
+    "FOLLOWUP CAP: followups_so_far is capped at 2. If followups_so_far >= 2, you MUST pick "
+    "next_question or end_section — NEVER ask a third follow-up on the same primary question. "
+    "Two follow-ups is the limit even if the answer still feels thin; pivoting respects the "
+    "candidate's time.\n\n"
 
     "SCORING:\n"
     "- For nudge decisions, scores will be ignored by the system; emit any reasonable values.\n"
@@ -187,6 +204,7 @@ Candidate's cumulative answer to the current question:
 \"\"\"{answer}\"\"\"
 
 Nudges already given on this question: {nudges_so_far} (max allowed: 2)
+Substantive follow-ups already asked on this primary question: {followups_so_far} (max allowed: 2)
 Time remaining: {time_remaining_seconds}s
 
 Return JSON in this exact shape:
@@ -209,42 +227,57 @@ async def decide_next_turn(
     focus: str | None = None,
     industry: str | None = None,
     nudges_so_far: int = 0,
+    followups_so_far: int = 0,
 ) -> dict:
     provider = get_llm_provider()
     history_text = "\n".join(
         f"[{h.get('role','?')}] {h.get('content','')}" for h in history[-12:]
     )
-    raw = await provider.chat(
-        messages=[
-            {"role": "system", "content": FOLLOWUP_SYSTEM},
-            {
-                "role": "user",
-                "content": FOLLOWUP_USER_TEMPLATE.format(
-                    role=role,
-                    seniority_label=_seniority_label(seniority),
-                    focus_label=_focus_label(focus),
-                    industry_clause=_industry_clause(industry),
-                    plan_json=json.dumps(plan, ensure_ascii=False)[:4000],
-                    resume_summary=resume_summary[:2000],
-                    history=history_text[:6000],
-                    answer=answer[:4000],
-                    nudges_so_far=nudges_so_far,
-                    time_remaining_seconds=time_remaining_seconds,
-                ),
-            },
-        ],
-        response_format=JSON_RESPONSE,
-        temperature=0.5,
-    )
+    fallback = {
+        "decision": "next_question",
+        "next_text": "Thanks for that. Let's move on to the next question.",
+        "scores": {"clarity": 5, "depth": 5, "correctness": 5, "communication": 5},
+        "rationale": "fallback (LLM unavailable or invalid)",
+    }
     try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        data = {
-            "decision": "next_question",
-            "next_text": "Thanks. Let's move to the next question.",
-            "scores": {"clarity": 5, "depth": 5, "correctness": 5, "communication": 5},
-            "rationale": "fallback (LLM JSON parse failed)",
-        }
+        raw = await asyncio.wait_for(
+            provider.chat(
+                messages=[
+                    {"role": "system", "content": FOLLOWUP_SYSTEM},
+                    {
+                        "role": "user",
+                        "content": FOLLOWUP_USER_TEMPLATE.format(
+                            role=role,
+                            seniority_label=_seniority_label(seniority),
+                            focus_label=_focus_label(focus),
+                            industry_clause=_industry_clause(industry),
+                            plan_json=json.dumps(plan, ensure_ascii=False)[:4000],
+                            resume_summary=resume_summary[:2000],
+                            history=history_text[:6000],
+                            answer=answer[:4000],
+                            nudges_so_far=nudges_so_far,
+                            followups_so_far=followups_so_far,
+                            time_remaining_seconds=time_remaining_seconds,
+                        ),
+                    },
+                ],
+                response_format=JSON_RESPONSE,
+                temperature=0.5,
+            ),
+            timeout=LLM_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        log.warning("LLM call timed out after %ss — using fallback", LLM_TIMEOUT_SECONDS)
+        data = fallback
+    except Exception as e:  # network / auth / provider error
+        log.exception("LLM call failed (%s) — using fallback", e)
+        data = fallback
+    else:
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            log.warning("LLM returned non-JSON: %r — using fallback", raw[:200])
+            data = fallback
     decision = data.get("decision", "next_question")
     if decision not in ("nudge", "ask_followup", "next_question", "end_section"):
         decision = "next_question"

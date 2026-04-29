@@ -89,12 +89,27 @@ export function ConversationLog({ turns }: Props) {
                   )}
                 </span>
 
-                {t.answer ? (
-                  <p className="text-body leading-relaxed text-ink">{t.answer}</p>
-                ) : t.interim ? (
-                  <p className="font-display italic leading-relaxed text-ink-soft">
-                    <WordReveal text={t.interim} keyPrefix={t.index} />
-                    <BlinkingCaret />
+                {/*
+                  Three render modes — the live phrase always shows when it
+                  exists, even on top of an already-committed answer (which
+                  happens after a nudge: the candidate has paused, their last
+                  utterance was committed, and now they're speaking the
+                  continuation).
+                */}
+                {t.answer || t.interim ? (
+                  <p className="leading-relaxed">
+                    {t.answer && (
+                      <span className="text-body text-ink">{t.answer}</span>
+                    )}
+                    {t.interim && (
+                      <>
+                        {t.answer && " "}
+                        <span className="font-display italic text-ink-soft">
+                          <WordReveal text={t.interim} keyPrefix={t.index} />
+                          <BlinkingCaret />
+                        </span>
+                      </>
+                    )}
                   </p>
                 ) : (
                   <p className="text-body italic text-ink-muted">
