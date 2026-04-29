@@ -41,6 +41,12 @@ _STOP_INTERVIEW_PATTERNS = [
 
 NUDGE_CAP = 2
 
+# Max real follow-ups (substantive probes) on a single primary question
+# before we force the next planned question. Without this cap the LLM tends
+# to rephrase the same probe two or three times when the candidate is
+# struggling with a topic — which feels punitive and doesn't help.
+FOLLOWUP_CAP = 2
+
 NUDGE_FALLBACKS = (
     "Take your time.",
     "Go on.",
@@ -60,6 +66,27 @@ def _wants_to_stop_interview(text: str) -> bool:
         if pat.search(text):
             return True
     return False
+
+
+# Common throat-clearing / filler words that don't add semantic content.
+# Used by the deterministic "is this answer too short to be real" guard.
+_FILLER_WORDS = frozenset({
+    "uh", "um", "ah", "er", "hmm", "mm",
+    "yeah", "yep", "yes", "no", "ok", "okay",
+})
+
+# Below this threshold of meaningful words we treat the cumulative answer as
+# a fragment and nudge for more — without spending an LLM round-trip. The
+# LLM is still authoritative for everything above the threshold.
+MIN_ANSWER_WORDS = 5
+
+
+def _meaningful_word_count(text: str) -> int:
+    """Count words after stripping pure fillers. Used by the short-answer guard."""
+    if not text:
+        return 0
+    words = re.findall(r"\b[a-zA-Z']+\b", text.lower())
+    return sum(1 for w in words if w not in _FILLER_WORDS)
 
 
 class SessionOrchestrator:
@@ -82,6 +109,11 @@ class SessionOrchestrator:
         # Number of soft nudges already given on the current turn. Resets to 0
         # whenever a new question turn is created. Capped at NUDGE_CAP.
         self._nudges_on_current_turn: int = 0
+        # Number of substantive follow-ups asked since the last *primary*
+        # planned question. Resets to 0 when we move to next_question. Capped
+        # at FOLLOWUP_CAP so the candidate isn't asked rephrasings of the
+        # same probe over and over.
+        self._followups_on_current_question: int = 0
 
     @property
     def time_remaining_seconds(self) -> int:
@@ -160,6 +192,30 @@ class SessionOrchestrator:
                 await self.db.commit()
                 return await self._end_session("Thanks — that's all the time we have.")
 
+            # Deterministic short-answer guard. Two-word "answers" like
+            # "desirable actions." or "Okay." are nearly always continuation
+            # fragments from the previous thought, not real answers — the
+            # LLM is unreliable about classifying these so we handle them
+            # in code: if the cumulative answer has fewer than MIN_ANSWER_WORDS
+            # meaningful words and we haven't hit the nudge cap, speak a soft
+            # nudge and keep listening. Skips an LLM round-trip.
+            if (
+                _meaningful_word_count(combined) < MIN_ANSWER_WORDS
+                and self._nudges_on_current_turn < NUDGE_CAP
+            ):
+                idx = min(self._nudges_on_current_turn, len(NUDGE_FALLBACKS) - 1)
+                nudge_text = NUDGE_FALLBACKS[idx]
+                self._nudges_on_current_turn += 1
+                self.history.append({"role": "interviewer", "content": nudge_text})
+                await self.db.commit()
+                return {
+                    "decision": "nudge",
+                    "next_text": nudge_text,
+                    "scores": None,
+                    "ended": False,
+                    "is_nudge": True,
+                }
+
             # Ask the agent. Always pass the cumulative answer so the model sees
             # the whole context, not just the latest fragment.
             decision = await decide_next_turn(
@@ -173,6 +229,7 @@ class SessionOrchestrator:
                 focus=self.session.focus,
                 industry=self.session.industry,
                 nudges_so_far=self._nudges_on_current_turn,
+                followups_so_far=self._followups_on_current_question,
             )
 
             move = decision["decision"]
@@ -186,6 +243,14 @@ class SessionOrchestrator:
                     next_text = (
                         "Could you take that one step further — what specifically did you do?"
                     )
+
+            # Hard cap on follow-ups. If we've already asked FOLLOWUP_CAP
+            # follow-ups on the current primary question and the LLM wants
+            # another one, force the next planned question. Drop the LLM's
+            # follow-up text so the orchestrator falls back to the plan.
+            if move == "ask_followup" and self._followups_on_current_question >= FOLLOWUP_CAP:
+                move = "next_question"
+                next_text = ""
 
             if move == "nudge":
                 # Soft continuation: do NOT create a new Turn, do NOT persist
@@ -216,15 +281,19 @@ class SessionOrchestrator:
                 return await self._end_session(next_text or "Thanks for your time.")
 
             # Either a real follow-up on the same question, or move to the next
-            # planned one. Either way we create a fresh Turn and reset the nudge
-            # counter so the next answer starts patient again.
+            # planned one. Either way we create a fresh Turn. Counters reset
+            # only when we move to a new primary question — follow-ups on the
+            # same primary share the follow-up counter so the cap applies
+            # across them.
             if move == "next_question":
                 self.plan_idx += 1
                 kind = "primary"
                 if self.plan_idx < len(self.plan):
                     next_text = next_text or self.plan[self.plan_idx]["question"]
+                self._followups_on_current_question = 0
             else:
                 kind = "followup"
+                self._followups_on_current_question += 1
 
             new_idx = (self.current_turn.index or 0) + 1
             new_turn = Turn(

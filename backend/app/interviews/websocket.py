@@ -20,6 +20,10 @@ Protocol:
     utterance (Deepgram UtteranceEnd). The client APPENDS each transcript onto
     the current turn's answer — across nudges, the answer accumulates.
   - Then sends another ai_question / ai_nudge, etc., until the orchestrator ends.
+  - On a recoverable processing error (LLM timeout, TTS 5xx, etc.) the server
+    sends {"type": "ai_idle"} so the client clears the "thinking" state, plus
+    {"type": "error", "message": "..."} so a toast can surface the issue.
+    The consumer loop survives — the candidate can keep going.
 """
 
 from __future__ import annotations
@@ -160,23 +164,41 @@ async def interview_ws(
         })
 
         async def consume_transcripts():
+            # The loop must NEVER die on a single failure — if we let an
+            # exception escape, the consumer task ends and any future
+            # transcripts pile up in the queue with no one to process them.
+            # The candidate sees "CONSIDERING YOUR ANSWER…" forever. So we
+            # wrap each iteration, log, and recover.
             while not orch.ended:
                 transcript = await pending.get()
                 async with send_lock:
                     await websocket.send_json({"type": "ai_thinking"})
-                result = await orch.submit_answer(transcript)
-                next_text = result.get("next_text") or ""
-                if next_text:
-                    await speak(next_text, is_nudge=bool(result.get("is_nudge")))
-                async with send_lock:
-                    await websocket.send_json({
-                        "type": "time_remaining",
-                        "seconds": orch.time_remaining_seconds,
-                    })
-                if result.get("ended"):
+                try:
+                    result = await orch.submit_answer(transcript)
+                    next_text = result.get("next_text") or ""
+                    if next_text:
+                        await speak(next_text, is_nudge=bool(result.get("is_nudge")))
                     async with send_lock:
-                        await websocket.send_json({"type": "session_ended"})
-                    return
+                        await websocket.send_json({
+                            "type": "time_remaining",
+                            "seconds": orch.time_remaining_seconds,
+                        })
+                    if result.get("ended"):
+                        async with send_lock:
+                            await websocket.send_json({"type": "session_ended"})
+                        return
+                except Exception as e:
+                    # Most likely the LLM hung past its timeout, the TTS
+                    # provider 5xx'd, or the DB blipped. Tell the client to
+                    # stop showing "thinking", surface a soft error toast,
+                    # and stay in the loop so the candidate can keep going.
+                    log.exception("Turn processing failed: %s", e)
+                    async with send_lock:
+                        await websocket.send_json({"type": "ai_idle"})
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "We hit a snag processing that — please try again.",
+                        })
 
         consumer = asyncio.create_task(consume_transcripts())
 
