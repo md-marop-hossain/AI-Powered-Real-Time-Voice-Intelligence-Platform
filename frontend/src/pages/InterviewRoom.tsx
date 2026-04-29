@@ -9,19 +9,20 @@ import { useAudioPlayer } from "@/hooks/useAudioPlayer";
 import { easeEditorial, durations } from "@/lib/motion";
 
 import { Eyebrow } from "@/components/editorial/Eyebrow";
-import { NumberedMarker } from "@/components/editorial/NumberedMarker";
 import { EditorialButton } from "@/components/editorial/EditorialButton";
 import { CountdownTimer } from "@/components/interview/CountdownTimer";
 import { Waveform } from "@/components/interview/Waveform";
-import { AISpeakingIndicator } from "@/components/interview/AISpeakingIndicator";
+import { AIAvatar } from "@/components/interview/AIAvatar";
+import { QuestionCard } from "@/components/interview/QuestionCard";
 import {
-  ConversationLog,
-  ConversationTurn,
-} from "@/components/interview/ConversationLog";
+  Transcript,
+  type ConversationTurn,
+} from "@/components/interview/Transcript";
 import { SessionPreflightCheck } from "@/components/interview/SessionPreflightCheck";
 import { InterviewRules } from "@/components/interview/InterviewRules";
 import { KeyboardShortcuts } from "@/components/interview/KeyboardShortcuts";
 import { ResumeFootnote } from "@/components/interview/ResumeFootnote";
+import { useInterviewState } from "@/hooks/useInterviewState";
 
 const WS_URL = import.meta.env.VITE_WS_URL ?? "ws://localhost:8000";
 
@@ -76,6 +77,18 @@ export default function InterviewRoom() {
   const violationGraceUntilRef = useRef<number>(0);
 
   const player = useAudioPlayer();
+
+  // Central UI state — derives `phase` and `avatarState` from the raw
+  // booleans driven by WebSocket events. Visual components (AIAvatar,
+  // status pills, etc.) read from this rather than from individual flags.
+  const ui = useInterviewState({
+    connected,
+    micEnabled,
+    aiSpeaking,
+    userSpeaking,
+    aiThinking,
+    ended,
+  });
 
   const sendFrame = useCallback(
     (frame: ArrayBuffer) => {
@@ -469,107 +482,97 @@ export default function InterviewRoom() {
 
         {/* Zone 2 — question */}
         <section className="border-b border-rule py-16">
-          <AnimatePresence mode="wait">
-            {currentQ ? (
-              <motion.div
-                key={currentQ.index}
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ duration: durations.slow, ease: easeEditorial }}
-                className="max-w-prose"
-              >
-                <NumberedMarker
-                  index={`Q${currentQ.index}`}
-                  className="mb-6 block"
-                />
-                <p className="text-question text-ink">"{currentQ.text}"</p>
-                {askedDuration !== null && !aiSpeaking && (
-                  <motion.p
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    transition={{ duration: durations.base, ease: easeEditorial }}
-                    className="mt-6 font-mono text-eyebrow text-ink-muted"
-                  >
-                    — asked by Rehearsal · {askedDuration.toFixed(1)}s
-                  </motion.p>
-                )}
-              </motion.div>
-            ) : (
-              <p className="text-body text-ink-muted">
-                Waiting for the first question…
-              </p>
-            )}
-          </AnimatePresence>
+          <QuestionCard
+            index={currentQ?.index ?? null}
+            text={currentQ?.text ?? ""}
+            askedDuration={askedDuration}
+            isAsking={ui.isAISpeaking}
+          />
         </section>
 
-        {/* Zone 3 — speaking indicator (AI or user) */}
+        {/* Zone 3 — AI orb (always visible) + waveform when the candidate
+            speaks. State is driven by `ui` (the central InterviewState),
+            which is derived from real WebSocket events. */}
         <section className="py-10">
-          <AnimatePresence mode="wait">
-            {aiSpeaking ? (
-              <motion.div
-                key="ai"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: durations.base, ease: easeEditorial }}
-              >
-                <AISpeakingIndicator amplitude={player.amplitude} />
-                <p className="mt-6 text-center font-mono text-eyebrow text-ink-muted">
-                  REHEARSAL IS SPEAKING
-                </p>
-              </motion.div>
-            ) : (
-              <motion.div
-                key="user"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: durations.base, ease: easeEditorial }}
-              >
-                <div className="h-[120px]">
-                  <Waveform analyser={analyser} active={micEnabled && !aiSpeaking} />
-                </div>
-                <div className="mt-4 flex items-center justify-center gap-3 font-mono text-eyebrow">
-                  {aiThinking ? (
-                    <ThinkingDots />
-                  ) : (
-                    <span
-                      className={`h-2 w-2 rounded-full ${
-                        !connected
-                          ? "bg-ink-muted"
-                          : userSpeaking
-                            ? "bg-accent animate-pulse"
-                            : micEnabled
-                              ? "bg-accent"
-                              : "bg-ink-muted"
-                      }`}
-                      aria-hidden="true"
-                    />
-                  )}
-                  <span
-                    className={
-                      userSpeaking
+          <div className="flex flex-col items-center gap-6">
+            <AIAvatar
+              state={ui.avatarState}
+              amplitude={ui.isAISpeaking ? player.amplitude : 0}
+              size={200}
+            />
+
+            <AnimatePresence mode="wait">
+              {!ui.isAISpeaking && (
+                <motion.div
+                  key="waveform"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 96 }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: durations.base, ease: easeEditorial }}
+                  className="w-full max-w-prose overflow-hidden"
+                >
+                  <Waveform
+                    analyser={analyser}
+                    active={ui.isMicEnabled && !ui.isAISpeaking}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            <motion.div
+              layout
+              className="flex items-center justify-center gap-3 font-mono text-eyebrow"
+            >
+              {ui.isThinking ? (
+                <ThinkingDots />
+              ) : (
+                <motion.span
+                  layout
+                  animate={{
+                    scale: ui.isUserSpeaking ? [1, 1.4, 1] : 1,
+                    opacity: 1,
+                  }}
+                  transition={{
+                    duration: 1,
+                    repeat: ui.isUserSpeaking ? Infinity : 0,
+                    ease: "easeInOut",
+                  }}
+                  className={`h-2 w-2 rounded-full ${
+                    !ui.isConnected
+                      ? "bg-ink-muted"
+                      : ui.isAISpeaking
+                        ? "bg-accent"
+                        : ui.isUserSpeaking
+                          ? "bg-accent"
+                          : ui.isMicEnabled
+                            ? "bg-accent"
+                            : "bg-ink-muted"
+                  }`}
+                  aria-hidden="true"
+                />
+              )}
+              <AnimatePresence mode="wait">
+                <motion.span
+                  key={ui.phase}
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: durations.quick, ease: easeEditorial }}
+                  className={
+                    ui.isAISpeaking
+                      ? "text-ink"
+                      : ui.isUserSpeaking
                         ? "text-accent"
-                        : aiThinking
+                        : ui.isThinking
                           ? "text-ink"
                           : "text-ink-muted"
-                    }
-                  >
-                    {!connected
-                      ? "CONNECTING…"
-                      : aiThinking
-                        ? "CONSIDERING YOUR ANSWER…"
-                        : userSpeaking
-                          ? "YOU ARE SPEAKING"
-                          : micEnabled
-                            ? "LISTENING — SPEAK NATURALLY"
-                            : "MIC OFF"}
-                  </span>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+                  }
+                >
+                  {phaseLabel(ui.phase, ui.isMicEnabled)}
+                </motion.span>
+              </AnimatePresence>
+            </motion.div>
+          </div>
         </section>
 
         {/* Zone 4 — conversation log (always visible) */}
@@ -580,7 +583,7 @@ export default function InterviewRoom() {
               {turns.length} {turns.length === 1 ? "TURN" : "TURNS"}
             </Eyebrow>
           </div>
-          <ConversationLog turns={turns} />
+          <Transcript turns={turns} />
         </section>
 
         {/* Footer actions */}
@@ -762,6 +765,37 @@ export default function InterviewRoom() {
       />
     </div>
   );
+}
+
+/**
+ * Translates the central `phase` into the eyebrow label rendered under the
+ * AIAvatar. Kept next to the room (not inside the hook) because the wording
+ * is presentational, not state.
+ */
+function phaseLabel(
+  phase:
+    | "connecting"
+    | "ai-asking"
+    | "thinking"
+    | "user-speaking"
+    | "listening"
+    | "ended",
+  micEnabled: boolean,
+): string {
+  switch (phase) {
+    case "connecting":
+      return "CONNECTING…";
+    case "ai-asking":
+      return "REHEARSAL IS SPEAKING";
+    case "thinking":
+      return "CONSIDERING YOUR ANSWER…";
+    case "user-speaking":
+      return "YOU ARE SPEAKING";
+    case "listening":
+      return micEnabled ? "LISTENING — SPEAK NATURALLY" : "MIC OFF";
+    case "ended":
+      return "SESSION ENDED";
+  }
 }
 
 /**
