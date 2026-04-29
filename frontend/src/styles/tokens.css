@@ -1,4 +1,6 @@
 :root {
+  color-scheme: light;
+
   /* Canvas — warm off-white, never pure #fff */
   --canvas: #F5F1EA;
   --canvas-elevated: #FBF8F2;
@@ -21,6 +23,49 @@
   /* Borders & dividers */
   --rule: rgba(26, 24, 20, 0.10);
   --rule-strong: rgba(26, 24, 20, 0.20);
+}
+
+/*
+ * Dark theme — mirrors the cream architecture.
+ * Activated by setting `data-theme="dark"` on <html>. The theme store
+ * persists the choice; an inline script in index.html applies it before
+ * first paint to avoid a flash.
+ */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Canvas — deep warm near-black, never pure #000 */
+  --canvas: #0E0D0B;
+  --canvas-elevated: #1A1815;
+  --canvas-sunken: #08070A;
+
+  /* Ink — warm cream as text on dark */
+  --ink: #F5F1EA;
+  --ink-soft: #C9C3B5;
+  --ink-muted: #8A8478;
+
+  /* Accent — vermillion, slightly lifted for dark contrast */
+  --accent: #FF5C3A;
+  --accent-hover: #FF7250;
+
+  /* Signal colors — brightened for legibility on dark */
+  --success: #5BB286;
+  --warning: #D4A12B;
+  --error: #E25A48;
+
+  /* Borders & dividers — cream tinted */
+  --rule: rgba(245, 241, 234, 0.10);
+  --rule-strong: rgba(245, 241, 234, 0.20);
+}
+
+/* Smooth theme swap so backgrounds, borders, and text don't snap. */
+html,
+body,
+[data-theme] {
+  transition:
+    background-color 300ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 300ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 300ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @media (prefers-reduced-motion: reduce) {

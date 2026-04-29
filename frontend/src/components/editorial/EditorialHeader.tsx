@@ -3,6 +3,7 @@ import { Link, NavLink, useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { Eyebrow } from "./Eyebrow";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { ThemeToggle } from "./ThemeToggle";
 import { useAuthStore } from "@/store/auth";
 
 const navLinks = [
@@ -60,6 +61,7 @@ export function EditorialHeader() {
               <Eyebrow as="span">Sign out</Eyebrow>
             </button>
           )}
+          <ThemeToggle />
         </nav>
       </div>
 

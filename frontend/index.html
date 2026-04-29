@@ -5,6 +5,29 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="A rehearsal room for interviews — practice the conversation that changes everything." />
     <title>Rehearsal — A rehearsal room for interviews</title>
+    <script>
+      // Apply theme before React paints so the user never sees a flash of
+      // the wrong palette. Reads the same localStorage key Zustand writes
+      // (`rehearsal-theme`); falls back to the OS preference for new users.
+      (function () {
+        try {
+          var theme = null;
+          var raw = localStorage.getItem("rehearsal-theme");
+          if (raw) {
+            try {
+              theme = JSON.parse(raw)?.state?.theme || null;
+            } catch (e) {}
+          }
+          if (!theme && window.matchMedia &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches) {
+            theme = "dark";
+          }
+          if (theme === "dark") {
+            document.documentElement.setAttribute("data-theme", "dark");
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

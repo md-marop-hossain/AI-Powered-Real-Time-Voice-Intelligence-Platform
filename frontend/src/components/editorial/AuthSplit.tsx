@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { easeEditorial, durations } from "@/lib/motion";
 import { Eyebrow } from "./Eyebrow";
+import { ThemeToggle } from "./ThemeToggle";
 
 interface Props {
   eyebrow: string;
@@ -35,6 +36,7 @@ export function AuthSplit({ eyebrow, heading, sub, formTitle, children, footnote
               initial: { opacity: 0, y: 16 },
               animate: { opacity: 1, y: 0, transition: { duration: durations.base, ease: easeEditorial } },
             }}
+            className="flex items-center justify-between gap-4"
           >
             <Link
               to="/login"
@@ -43,6 +45,7 @@ export function AuthSplit({ eyebrow, heading, sub, formTitle, children, footnote
             >
               Rehearsal
             </Link>
+            <ThemeToggle />
           </motion.div>
 
           <div className="max-w-[680px]">
