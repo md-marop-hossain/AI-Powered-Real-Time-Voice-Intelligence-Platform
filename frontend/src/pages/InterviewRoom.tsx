@@ -19,6 +19,7 @@ import {
   ConversationTurn,
 } from "@/components/interview/ConversationLog";
 import { SessionPreflightCheck } from "@/components/interview/SessionPreflightCheck";
+import { InterviewRules } from "@/components/interview/InterviewRules";
 import { KeyboardShortcuts } from "@/components/interview/KeyboardShortcuts";
 import { ResumeFootnote } from "@/components/interview/ResumeFootnote";
 
@@ -36,6 +37,11 @@ export default function InterviewRoom() {
   const token = useAuthStore((s) => s.accessToken);
 
   const [preflightDone, setPreflightDone] = useState(false);
+  // Second gate after preflight: the candidate has to acknowledge the room
+  // rules (no tab-switch, stay in fullscreen, etc.) before mic capture and
+  // the live WebSocket open. The "Begin interview" click also doubles as the
+  // user gesture that requests fullscreen.
+  const [rulesAcknowledged, setRulesAcknowledged] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
@@ -119,7 +125,7 @@ export default function InterviewRoom() {
   // together when Alt-Tabbing) within 1500ms so they're treated as one event.
   const recordViolation = useCallback(
     (reason: string) => {
-      if (!preflightDone) return;
+      if (!preflightDone || !rulesAcknowledged) return;
       if (ended) return;
       if (focusEndedByViolations) return;
       const now = performance.now();
@@ -136,14 +142,14 @@ export default function InterviewRoom() {
         ws.send(JSON.stringify({ type: "focus_violation", reason }));
       }
     },
-    [preflightDone, ended, focusEndedByViolations],
+    [preflightDone, rulesAcknowledged, ended, focusEndedByViolations],
   );
 
   useEffect(() => {
-    if (!preflightDone) return;
+    if (!preflightDone || !rulesAcknowledged) return;
     if (ended) return;
-    // Grace period: ignore everything for ~2s after preflight completes so
-    // the fullscreen permission prompt and the focus shuffle that follows
+    // Grace period: ignore everything for ~2s after the rules are accepted
+    // so the fullscreen permission prompt and the focus shuffle that follows
     // don't immediately count as a violation.
     violationGraceUntilRef.current = performance.now() + 2000;
     const onVisibility = () => {
@@ -164,7 +170,7 @@ export default function InterviewRoom() {
       document.removeEventListener("fullscreenchange", onFullscreenChange);
       window.removeEventListener("beforeunload", onBeforeUnload);
     };
-  }, [preflightDone, ended, recordViolation]);
+  }, [preflightDone, rulesAcknowledged, ended, recordViolation]);
 
   const resumeFromViolation = useCallback(() => {
     // Click handler for the "Return to interview" button. We're inside a
@@ -198,9 +204,10 @@ export default function InterviewRoom() {
     }
   }, [timeRemaining]);
 
-  // Open WebSocket once preflight is satisfied.
+  // Open WebSocket once preflight is satisfied AND the candidate has
+  // acknowledged the room rules (and triggered fullscreen).
   useEffect(() => {
-    if (!preflightDone || !sessionId || !token) return;
+    if (!preflightDone || !rulesAcknowledged || !sessionId || !token) return;
 
     const ws = new WebSocket(`${WS_URL}/ws/interview/${sessionId}?token=${token}`);
     ws.binaryType = "arraybuffer";
@@ -355,7 +362,7 @@ export default function InterviewRoom() {
       ws.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preflightDone, sessionId, token]);
+  }, [preflightDone, rulesAcknowledged, sessionId, token]);
 
   const requestEndSession = useCallback(() => {
     if (ended) return;
@@ -376,12 +383,36 @@ export default function InterviewRoom() {
     wsRef.current?.send(JSON.stringify({ type: "end_speech" }));
   }, []);
 
-  // Preflight first.
+  // The "Begin interview" click on the rules screen is the gesture that
+  // (a) requests fullscreen and (b) flips the gate that opens the WebSocket.
+  // Browsers only honor requestFullscreen() inside a user-initiated event,
+  // so it has to live on this click — not in a useEffect.
+  const handleBeginInterview = useCallback(() => {
+    const el = document.documentElement;
+    el.requestFullscreen?.().catch((err) => {
+      console.warn("Fullscreen request rejected:", err);
+    });
+    setRulesAcknowledged(true);
+  }, []);
+
+  // Step 1 — preflight (mic / server / voice clarity).
   if (!preflightDone) {
     return (
       <div className="min-h-screen bg-canvas">
         <main className="editorial-container py-16 md:py-24">
           <SessionPreflightCheck onReady={() => setPreflightDone(true)} />
+        </main>
+      </div>
+    );
+  }
+
+  // Step 2 — rules of the room. The candidate must explicitly accept before
+  // the WebSocket connects and mic capture begins.
+  if (!rulesAcknowledged) {
+    return (
+      <div className="min-h-screen bg-canvas">
+        <main className="editorial-container py-16 md:py-24">
+          <InterviewRules onAccept={handleBeginInterview} />
         </main>
       </div>
     );
@@ -494,20 +525,22 @@ export default function InterviewRoom() {
                   <Waveform analyser={analyser} active={micEnabled && !aiSpeaking} />
                 </div>
                 <div className="mt-4 flex items-center justify-center gap-3 font-mono text-eyebrow">
-                  <span
-                    className={`h-2 w-2 rounded-full ${
-                      !connected
-                        ? "bg-ink-muted"
-                        : userSpeaking
-                          ? "bg-accent animate-pulse"
-                          : aiThinking
-                            ? "bg-ink animate-pulse"
+                  {aiThinking ? (
+                    <ThinkingDots />
+                  ) : (
+                    <span
+                      className={`h-2 w-2 rounded-full ${
+                        !connected
+                          ? "bg-ink-muted"
+                          : userSpeaking
+                            ? "bg-accent animate-pulse"
                             : micEnabled
                               ? "bg-accent"
                               : "bg-ink-muted"
-                    }`}
-                    aria-hidden="true"
-                  />
+                      }`}
+                      aria-hidden="true"
+                    />
+                  )}
                   <span
                     className={
                       userSpeaking
@@ -722,5 +755,30 @@ export default function InterviewRoom() {
         onArrowRight={skipQuestion}
       />
     </div>
+  );
+}
+
+/**
+ * Three pulsing dots used while the AI is "considering your answer". Each dot
+ * fades and slightly rises on a staggered cycle so the row reads as live
+ * processing rather than a frozen "loading…" string.
+ */
+function ThinkingDots() {
+  return (
+    <span aria-hidden="true" className="flex items-center gap-1">
+      {[0, 1, 2].map((i) => (
+        <motion.span
+          key={i}
+          className="h-1.5 w-1.5 rounded-full bg-ink"
+          animate={{ opacity: [0.25, 1, 0.25], y: [0, -2, 0] }}
+          transition={{
+            duration: 1.1,
+            repeat: Infinity,
+            ease: "easeInOut",
+            delay: i * 0.15,
+          }}
+        />
+      ))}
+    </span>
   );
 }

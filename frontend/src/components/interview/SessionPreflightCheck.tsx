@@ -347,24 +347,6 @@ export function SessionPreflightCheck({ onReady }: Props) {
 
   const allPassed = mic === "passed" && server === "passed" && voice === "passed";
 
-  // Enter fullscreen on the same user gesture that starts the interview.
-  // Browsers only allow requestFullscreen() inside a user-initiated event,
-  // so we chain it onto the click before forwarding to onReady.
-  const handleStart = useCallback(() => {
-    const el = document.documentElement;
-    const req = el.requestFullscreen?.bind(el);
-    if (req) {
-      req().catch((err) => {
-        // Most browsers reject if the user denies the prompt or the page is
-        // embedded somewhere fullscreen isn't allowed. We still proceed —
-        // the interview can run windowed; the room will just show a soft
-        // warning when fullscreen isn't active.
-        console.warn("Fullscreen request rejected:", err);
-      });
-    }
-    onReady();
-  }, [onReady]);
-
   return (
     <motion.section
       initial={{ opacity: 0, y: 16 }}
@@ -517,7 +499,7 @@ export function SessionPreflightCheck({ onReady }: Props) {
 
       <div className="mt-12 flex items-center justify-between">
         <Eyebrow>{allPassed ? "Ready" : "Awaiting checks"}</Eyebrow>
-        <EditorialButton onClick={handleStart} disabled={!allPassed} filled arrow>
+        <EditorialButton onClick={onReady} disabled={!allPassed} filled arrow>
           {allPassed ? "I'M READY" : "WAITING"}
         </EditorialButton>
       </div>

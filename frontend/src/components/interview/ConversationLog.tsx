@@ -52,12 +52,20 @@ export function ConversationLog({ turns }: Props) {
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: durations.base, ease: easeEditorial }}
-              className="relative pl-12"
+              className="group relative -mx-3 rounded-[2px] px-3 pt-3 pb-1 pl-12 transition-colors duration-base ease-editorial hover:bg-canvas-elevated/60"
               ref={isLast ? endRef : undefined}
             >
+              {/* New-turn glow line — draws across the top once on enter. */}
+              <motion.span
+                aria-hidden="true"
+                initial={{ scaleX: 0, opacity: 0.7 }}
+                animate={{ scaleX: 1, opacity: 0 }}
+                transition={{ duration: 0.9, ease: easeEditorial }}
+                className="pointer-events-none absolute left-0 right-0 top-0 h-px origin-left bg-accent"
+              />
               <span
                 aria-hidden="true"
-                className="absolute left-0 top-1 font-mono text-eyebrow text-ink-muted"
+                className="absolute left-0 top-4 font-mono text-eyebrow text-ink-muted transition-[color,transform] duration-base ease-editorial group-hover:-translate-x-1 group-hover:text-ink"
               >
                 {String(t.index).padStart(2, "0")}
               </span>
@@ -85,7 +93,7 @@ export function ConversationLog({ turns }: Props) {
                   <p className="text-body leading-relaxed text-ink">{t.answer}</p>
                 ) : t.interim ? (
                   <p className="font-display italic leading-relaxed text-ink-soft">
-                    {t.interim}
+                    <WordReveal text={t.interim} keyPrefix={t.index} />
                     <BlinkingCaret />
                   </p>
                 ) : (
@@ -146,5 +154,32 @@ function BlinkingCaret() {
       transition={{ duration: 1, repeat: Infinity, ease: "easeInOut" }}
       className="ml-1 inline-block h-[1em] w-[2px] -mb-[0.1em] bg-ink-muted"
     />
+  );
+}
+
+/**
+ * Word-by-word reveal for the live interim transcript. Each word is keyed by
+ * its position so framer-motion only animates *new* words appended at the end
+ * — words that already existed don't re-animate when the next interim update
+ * arrives. Result: the candidate sees their speech stream in word by word
+ * instead of the whole string flickering each tick.
+ */
+function WordReveal({ text, keyPrefix }: { text: string; keyPrefix: number }) {
+  const words = text.split(/\s+/).filter(Boolean);
+  return (
+    <>
+      {words.map((w, i) => (
+        <motion.span
+          key={`${keyPrefix}-${i}`}
+          initial={{ opacity: 0, y: 4, filter: "blur(2px)" }}
+          animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+          transition={{ duration: 0.22, ease: easeEditorial }}
+          className="inline-block"
+        >
+          {w}
+          {i < words.length - 1 ? " " : ""}
+        </motion.span>
+      ))}
+    </>
   );
 }
