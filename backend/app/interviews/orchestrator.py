@@ -47,6 +47,11 @@ NUDGE_FALLBACKS = (
     "Mm-hm — tell me more.",
 )
 
+# Max focus-integrity violations (tab switches, fullscreen exits, window blur)
+# tolerated before the session is auto-ended. The frontend warns at every
+# violation; the Nth violation triggers a graceful end.
+FOCUS_VIOLATION_LIMIT = 3
+
 
 def _wants_to_stop_interview(text: str) -> bool:
     if not text:
@@ -264,3 +269,42 @@ class SessionOrchestrator:
             self.session.status = SessionStatus.completed
             self.session.ended_at = datetime.now(timezone.utc)
             await self.db.commit()
+
+    async def record_focus_violation(self, reason: str) -> dict:
+        """Record a tab-switch / fullscreen-exit / blur event from the client.
+
+        Increments the persistent counter on the session. If the limit is hit,
+        ends the session gracefully and returns ended=True. Otherwise returns
+        the new count and how many strikes remain so the client can surface it.
+        """
+        async with self.lock:
+            if self.ended:
+                return {
+                    "count": self.session.focus_violations or 0,
+                    "limit": FOCUS_VIOLATION_LIMIT,
+                    "ended": True,
+                    "next_text": "",
+                }
+            current = (self.session.focus_violations or 0) + 1
+            self.session.focus_violations = current
+            await self.db.commit()
+            log.info(
+                "Focus violation #%s on session %s: %s",
+                current,
+                self.session.id,
+                reason,
+            )
+            if current >= FOCUS_VIOLATION_LIMIT:
+                end = await self._end_session(
+                    "Session ended — too many focus interruptions. "
+                    "Please stay in the interview tab next time."
+                )
+                end["count"] = current
+                end["limit"] = FOCUS_VIOLATION_LIMIT
+                return end
+            return {
+                "count": current,
+                "limit": FOCUS_VIOLATION_LIMIT,
+                "ended": False,
+                "next_text": "",
+            }

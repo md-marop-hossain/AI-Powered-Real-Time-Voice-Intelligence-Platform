@@ -210,19 +210,36 @@ export default function UploadPage() {
       toast.error("Please enter a target position.");
       return;
     }
+    if (!Number.isFinite(duration) || duration < 5 || duration > 60) {
+      toast.error("Duration must be between 5 and 60 minutes.");
+      return;
+    }
+    const payload = {
+      resume_id: resume.id,
+      role: role.trim(),
+      seniority,
+      focus,
+      industry: industry.trim() || null,
+      duration_minutes: duration,
+    };
     setPhase("starting");
     try {
-      const session = await api.post("/sessions", {
-        resume_id: resume.id,
-        role: role.trim(),
-        seniority,
-        focus,
-        industry: industry.trim() || null,
-        duration_minutes: duration,
-      });
+      const session = await api.post("/sessions", payload);
       navigate(`/interview/${session.data.id}`);
     } catch (e: any) {
-      toast.error(e.response?.data?.detail ?? "We couldn't open the room.");
+      // FastAPI 422 returns a list of validation errors under detail; render
+      // the first one so the failing field is visible without DevTools.
+      const detail = e?.response?.data?.detail;
+      let msg = "We couldn't open the room.";
+      if (typeof detail === "string") {
+        msg = detail;
+      } else if (Array.isArray(detail) && detail.length) {
+        const first = detail[0];
+        const field = Array.isArray(first?.loc) ? first.loc.join(".") : "input";
+        msg = `Invalid ${field}: ${first?.msg ?? "validation failed"}`;
+      }
+      console.error("startSession failed", { payload, response: e?.response?.data });
+      toast.error(msg);
       setPhase("configure");
     }
   };
