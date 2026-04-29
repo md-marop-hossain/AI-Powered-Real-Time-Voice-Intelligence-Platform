@@ -11,6 +11,11 @@ Protocol:
   - Client streams 16kHz mono PCM little-endian audio frames as binary messages.
   - When client wants to signal end-of-speech early, send {"type": "end_speech"}.
   - Client may send {"type": "end_session"} to terminate the interview.
+  - Client may send {"type": "focus_violation", "reason": "tab_switch"|...}
+    when the candidate tabs away, exits fullscreen, or otherwise loses focus.
+    Server replies with {"type": "focus_violation_ack", "count", "limit",
+    "reason"}, and once count >= limit, follows with {"type": "session_ended",
+    "reason": "focus_violations"}.
   - Server emits {"type": "transcript", "text": "..."} on each committed
     utterance (Deepgram UtteranceEnd). The client APPENDS each transcript onto
     the current turn's answer — across nudges, the answer accumulates.
@@ -193,6 +198,34 @@ async def interview_ws(
                     elif mtype == "end_speech":
                         # Deepgram VAD usually handles this; left as a manual nudge.
                         pass
+                    elif mtype == "focus_violation":
+                        # Tab switch / fullscreen exit / window blur reported
+                        # by the client. Record on the session, ack with the
+                        # current count, and end the session if the limit is
+                        # reached.
+                        reason = (data.get("reason") or "unknown")[:64]
+                        result = await orch.record_focus_violation(reason)
+                        ack = {
+                            "type": "focus_violation_ack",
+                            "count": result.get("count", 0),
+                            "limit": result.get("limit", 0),
+                            "reason": reason,
+                        }
+                        async with send_lock:
+                            await websocket.send_json(ack)
+                        if result.get("ended"):
+                            closing = result.get("next_text") or ""
+                            if closing:
+                                try:
+                                    await speak(closing)
+                                except Exception:
+                                    pass
+                            async with send_lock:
+                                await websocket.send_json({
+                                    "type": "session_ended",
+                                    "reason": "focus_violations",
+                                })
+                            break
                 else:
                     break
         except WebSocketDisconnect:

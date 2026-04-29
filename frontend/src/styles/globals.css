@@ -23,6 +23,14 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* Browsers paint the area outside the fullscreened element black by default.
+   Force the canvas color so the interview room blends into the viewport
+   instead of showing a black border. */
+:fullscreen,
+:-webkit-full-screen {
+  background: var(--canvas);
+}
+
 /* Editorial focus ring */
 *:focus-visible {
   outline: 2px solid var(--ink);

@@ -54,6 +54,20 @@ export default function InterviewRoom() {
   const [showFloatingTimer, setShowFloatingTimer] = useState(false);
   // Two-step End-Session confirmation; protects against accidental clicks.
   const [endConfirmOpen, setEndConfirmOpen] = useState(false);
+  // Focus-integrity bookkeeping. Each tab switch / fullscreen exit / blur
+  // event during an active session counts as a violation. The session is
+  // ended on the FOCUS_LIMIT-th strike (server-authoritative).
+  const FOCUS_LIMIT = 3;
+  const [focusViolations, setFocusViolations] = useState(0);
+  const [focusModalOpen, setFocusModalOpen] = useState(false);
+  const [focusReason, setFocusReason] = useState<string>("");
+  const [focusEndedByViolations, setFocusEndedByViolations] = useState(false);
+  // Local guard so a single blur+visibility burst counts as one violation.
+  const violationLockRef = useRef<number>(0);
+  // Don't count violations during the ~2s after preflight completes — the
+  // browser's fullscreen prompt and the post-permission focus shuffle can
+  // briefly hide/blur the page before the user has done anything wrong.
+  const violationGraceUntilRef = useRef<number>(0);
 
   const player = useAudioPlayer();
 
@@ -97,6 +111,68 @@ export default function InterviewRoom() {
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // Focus-integrity: detect tab switches, fullscreen exits, and window blur
+  // during an active session. Each event counts as one violation, pauses the
+  // mic, and pops a blocking modal. Coalesce bursts (visibility + blur fire
+  // together when Alt-Tabbing) within 1500ms so they're treated as one event.
+  const recordViolation = useCallback(
+    (reason: string) => {
+      if (!preflightDone) return;
+      if (ended) return;
+      if (focusEndedByViolations) return;
+      const now = performance.now();
+      if (now < violationGraceUntilRef.current) return;
+      if (now - violationLockRef.current < 1500) return;
+      violationLockRef.current = now;
+      setMicEnabled(false);
+      setEndConfirmOpen(false);
+      setFocusReason(reason);
+      setFocusModalOpen(true);
+      setFocusViolations((n) => n + 1);
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "focus_violation", reason }));
+      }
+    },
+    [preflightDone, ended, focusEndedByViolations],
+  );
+
+  useEffect(() => {
+    if (!preflightDone) return;
+    if (ended) return;
+    // Grace period: ignore everything for ~2s after preflight completes so
+    // the fullscreen permission prompt and the focus shuffle that follows
+    // don't immediately count as a violation.
+    violationGraceUntilRef.current = performance.now() + 2000;
+    const onVisibility = () => {
+      if (document.hidden) recordViolation("tab_hidden");
+    };
+    const onFullscreenChange = () => {
+      if (!document.fullscreenElement) recordViolation("fullscreen_exit");
+    };
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+    };
+  }, [preflightDone, ended, recordViolation]);
+
+  const resumeFromViolation = useCallback(() => {
+    // Click handler for the "Return to interview" button. We're inside a
+    // user gesture so requestFullscreen will be honored.
+    const el = document.documentElement;
+    el.requestFullscreen?.().catch(() => {});
+    setFocusModalOpen(false);
+    setMicEnabled(true);
   }, []);
 
   // Banners — five-minute toast and one-minute banner.
@@ -243,7 +319,17 @@ export default function InterviewRoom() {
               setMicEnabled(false);
               setAiSpeaking(false);
               setUserSpeaking(false);
+              if (msg.reason === "focus_violations") {
+                setFocusEndedByViolations(true);
+                setFocusModalOpen(true);
+              }
+              if (document.fullscreenElement) {
+                document.exitFullscreen?.().catch(() => {});
+              }
               ws.close();
+              break;
+            case "focus_violation_ack":
+              if (typeof msg.count === "number") setFocusViolations(msg.count);
               break;
             case "error":
               toast.error(msg.message ?? "Something interrupted us. We're looking into it.");
@@ -551,6 +637,79 @@ export default function InterviewRoom() {
                 <EditorialButton onClick={confirmEndSession} tone="accent">
                   End session
                 </EditorialButton>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Focus-integrity modal — fires when the candidate switches tabs,
+          exits fullscreen, or otherwise loses focus during the session. */}
+      <AnimatePresence>
+        {focusModalOpen && (
+          <motion.div
+            key="focus-violation"
+            className="fixed inset-0 z-[60] flex items-center justify-center"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: durations.base, ease: easeEditorial }}
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="focus-modal-title"
+          >
+            <div className="absolute inset-0 bg-ink/60" aria-hidden="true" />
+            <motion.div
+              initial={{ y: 12, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 12, opacity: 0 }}
+              transition={{ duration: durations.base, ease: easeEditorial }}
+              className="relative max-w-md rounded-md border border-rule bg-canvas-elevated px-10 py-9 text-center shadow-xl"
+            >
+              <Eyebrow className="mb-4 text-accent">
+                {focusEndedByViolations ? "SESSION ENDED" : "STAY IN THE INTERVIEW"}
+              </Eyebrow>
+              <h2
+                id="focus-modal-title"
+                className="font-display text-[26px] leading-snug text-ink"
+              >
+                {focusEndedByViolations
+                  ? "Too many interruptions."
+                  : "Switching tabs interrupts the session."}
+              </h2>
+              <p className="mt-4 text-body text-ink-soft">
+                {focusEndedByViolations ? (
+                  <>
+                    The session ended because focus was lost too many times.
+                    Your progress is saved and you can read your report.
+                  </>
+                ) : (
+                  <>
+                    Mock interviews work best when you stay on this page.
+                    Click below to return to fullscreen and pick up where you
+                    left off.
+                  </>
+                )}
+              </p>
+              <p className="mt-4 font-mono text-eyebrow text-ink-muted">
+                {focusEndedByViolations
+                  ? `${focusViolations} OF ${FOCUS_LIMIT} STRIKES`
+                  : `WARNING ${focusViolations} OF ${FOCUS_LIMIT} · ${focusReason.replace(/_/g, " ").toUpperCase()}`}
+              </p>
+              <div className="mt-8 flex items-center justify-center gap-8">
+                {focusEndedByViolations ? (
+                  <EditorialButton
+                    onClick={() => navigate(`/sessions/${sessionId}/report`)}
+                    tone="ink"
+                    arrow
+                  >
+                    Read the report
+                  </EditorialButton>
+                ) : (
+                  <EditorialButton onClick={resumeFromViolation} tone="accent">
+                    Return to interview
+                  </EditorialButton>
+                )}
               </div>
             </motion.div>
           </motion.div>

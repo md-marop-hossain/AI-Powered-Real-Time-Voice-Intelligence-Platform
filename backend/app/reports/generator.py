@@ -25,6 +25,7 @@ def build_report_summary(session: Session) -> dict:
         "turn_count": len(turns),
         "overall_score": agg["overall_score"],
         "dimension_averages": agg["dimension_averages"],
+        "focus_violations": int(getattr(session, "focus_violations", 0) or 0),
         "turns": [
             {
                 "index": t.index,

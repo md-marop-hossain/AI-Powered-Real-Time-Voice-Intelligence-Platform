@@ -48,6 +48,12 @@ class Session(Base):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     questions_plan: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     final_scores: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Count of focus-integrity violations (tab switches, fullscreen exits,
+    # window blur events) the candidate triggered during the live session.
+    # The session is auto-ended once this reaches the configured limit.
+    focus_violations: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
