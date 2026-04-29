@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import sys
 from datetime import datetime
 
 from jinja2 import Template
@@ -11,6 +13,24 @@ from app.models.session import Session
 from app.scoring.aggregator import aggregate_session_scores
 
 log = logging.getLogger(__name__)
+
+# WeasyPrint loads native GLib/Pango/Cairo via ctypes, which on Windows resolves
+# library names through PATH. Tesseract ships an outdated Pango that wins the
+# lookup if it appears first on PATH, so we prepend the GTK3 runtime bin here.
+# add_dll_directory alone is not enough — ctypes.util.find_library walks PATH.
+if sys.platform == "win32":
+    _gtk_bin = os.environ.get(
+        "GTK3_RUNTIME_BIN", r"C:\Program Files\GTK3-Runtime Win64\bin"
+    )
+    if os.path.isdir(_gtk_bin):
+        os.add_dll_directory(_gtk_bin)
+        if _gtk_bin not in os.environ.get("PATH", "").split(os.pathsep):
+            os.environ["PATH"] = _gtk_bin + os.pathsep + os.environ.get("PATH", "")
+        _fc_path = os.path.join(os.path.dirname(_gtk_bin), "etc", "fonts")
+        if os.path.isdir(_fc_path):
+            os.environ.setdefault("FONTCONFIG_PATH", _fc_path)
+    else:
+        log.warning("GTK3 runtime bin not found at %s; PDF rendering may fail", _gtk_bin)
 
 
 def build_report_summary(session: Session) -> dict:
@@ -110,10 +130,6 @@ PDF_TEMPLATE = Template("""
 
 def render_pdf(session: Session, summary: dict) -> bytes:
     html = PDF_TEMPLATE.render(summary=summary, now=datetime.utcnow().isoformat())
-    try:
-        from weasyprint import HTML
+    from weasyprint import HTML
 
-        return HTML(string=html).write_pdf()
-    except Exception as e:
-        log.warning("WeasyPrint unavailable, returning HTML bytes: %s", e)
-        return html.encode("utf-8")
+    return HTML(string=html).write_pdf()
