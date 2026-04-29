@@ -49,15 +49,22 @@ export default function ReportPage() {
   const navigate = useNavigate();
   const [report, setReport] = useState<ReportData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     if (!sessionId) return;
+    setLoading(true);
+    setLoadFailed(false);
     api
       .get<ReportData>(`/sessions/${sessionId}/report`)
       .then((r) => setReport(r.data))
-      .catch(() => toast.error("Something interrupted us. We're looking into it."))
+      .catch(() => {
+        setLoadFailed(true);
+        toast.error("Something interrupted us. We're looking into it.");
+      })
       .finally(() => setLoading(false));
-  }, [sessionId]);
+  }, [sessionId, reloadKey]);
 
   const dateLabel = useMemo(() => {
     const d = report?.summary.started_at ?? report?.summary.ended_at;
@@ -85,9 +92,37 @@ export default function ReportPage() {
       <div className="min-h-screen bg-canvas">
         <EditorialHeader />
         <main className="editorial-container py-32 text-center">
-          <p className="text-display text-ink-soft">
-            This page is somewhere else.
+          <Eyebrow className="text-accent">
+            {loadFailed ? "REPORT UNAVAILABLE" : "REPORT NOT READY"}
+          </Eyebrow>
+          <h1 className="mt-6 font-display text-[36px] leading-tight text-ink md:text-[44px]">
+            {loadFailed
+              ? "We couldn't load this report."
+              : "This report isn't ready yet."}
+          </h1>
+          <p className="mt-6 text-body text-ink-soft">
+            {loadFailed
+              ? "The server hit a snag building it. Try again in a moment, or head back to your sessions."
+              : "Finish the interview to generate your report, then come back here."}
           </p>
+          <div className="mt-12 flex items-center justify-center gap-8">
+            {loadFailed && (
+              <button
+                type="button"
+                onClick={() => setReloadKey((n) => n + 1)}
+                className="editorial-link text-ink"
+              >
+                Try again
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => navigate("/dashboard")}
+              className="editorial-link text-ink"
+            >
+              Back to your sessions <span aria-hidden="true">→</span>
+            </button>
+          </div>
         </main>
       </div>
     );

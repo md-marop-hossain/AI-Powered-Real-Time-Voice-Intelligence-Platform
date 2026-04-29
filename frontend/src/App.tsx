@@ -11,6 +11,7 @@ import DashboardPage from "@/pages/DashboardPage";
 import AccountPage from "@/pages/AccountPage";
 import UploadPage from "@/pages/UploadPage";
 import InterviewRoom from "@/pages/InterviewRoom";
+import InterviewCompletePage from "@/pages/InterviewCompletePage";
 import ReportPage from "@/pages/ReportPage";
 import NotFoundPage from "@/pages/NotFoundPage";
 
@@ -53,6 +54,14 @@ export default function App() {
         element={
           <ProtectedRoute>
             <InterviewRoom />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/sessions/:sessionId/complete"
+        element={
+          <ProtectedRoute>
+            <InterviewCompletePage />
           </ProtectedRoute>
         }
       />

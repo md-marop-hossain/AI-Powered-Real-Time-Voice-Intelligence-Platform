@@ -45,6 +45,9 @@ export default function InterviewRoom() {
   const [rulesAcknowledged, setRulesAcknowledged] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
+  // Holds the post-end navigation timer so we can cancel it if the room
+  // unmounts (e.g. user clicks "Read the report" before auto-redirect fires).
+  const completeRedirectRef = useRef<number | null>(null);
   const [connected, setConnected] = useState(false);
   const [micEnabled, setMicEnabled] = useState(false);
   const [aiSpeaking, setAiSpeaking] = useState(false);
@@ -348,6 +351,16 @@ export default function InterviewRoom() {
               if (msg.reason === "focus_violations") {
                 setFocusEndedByViolations(true);
                 setFocusModalOpen(true);
+              } else {
+                // Normal end (timer expired or user-confirmed end). Briefly
+                // hold on the ended state so any tail audio finishes, then
+                // route the candidate to the dedicated completion screen.
+                if (completeRedirectRef.current !== null) {
+                  window.clearTimeout(completeRedirectRef.current);
+                }
+                completeRedirectRef.current = window.setTimeout(() => {
+                  navigate(`/sessions/${sessionId}/complete`);
+                }, 1200);
               }
               if (document.fullscreenElement) {
                 document.exitFullscreen?.().catch(() => {});
@@ -379,6 +392,10 @@ export default function InterviewRoom() {
 
     return () => {
       ws.close();
+      if (completeRedirectRef.current !== null) {
+        window.clearTimeout(completeRedirectRef.current);
+        completeRedirectRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preflightDone, rulesAcknowledged, sessionId, token]);
