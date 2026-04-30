@@ -66,8 +66,13 @@ INITIAL_QUESTIONS_SYSTEM = (
     "level, the interview focus, and an optional industry. "
     "Produce a structured plan with 6-10 well-scoped primary questions. "
     "Tailor BOTH the difficulty to the seniority level and the question mix to the focus area. "
-    "Always reference concrete details from the resume (companies, projects, skills) where possible. "
-    "Do NOT invent experience the resume does not contain."
+    "Reference concrete details from the resume (companies, projects, skills) where possible. "
+    "Do NOT invent experience the resume does not contain.\n\n"
+    "HARD RULE — output candidate-ready questions ONLY. NEVER use bracketed "
+    "placeholder tokens like [Company Name], [Programming Language], [Project "
+    "Name], [Alternative Language], or [X]. If a specific detail isn't in the "
+    "resume, ask the question generically (e.g. 'a recent project where you "
+    "owned the design') instead of inserting a placeholder."
 )
 
 INITIAL_QUESTIONS_USER_TEMPLATE = """Target role: {role}

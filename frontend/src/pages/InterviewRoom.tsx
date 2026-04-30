@@ -49,12 +49,28 @@ export default function InterviewRoom() {
   // Holds the post-end navigation timer so we can cancel it if the room
   // unmounts (e.g. user clicks "Read the report" before auto-redirect fires).
   const completeRedirectRef = useRef<number | null>(null);
+  // Watchdog interval for polling session status when the WS dies before
+  // emitting `session_ended` or the local timer reaches 0 without a
+  // server close-out. Cleared whenever we actually navigate.
+  const watchdogRef = useRef<number | null>(null);
+  // Latch so the timer-zero watchdog only arms once per room mount.
+  const expiryWatchdogArmedRef = useRef<boolean>(false);
+  // True once we've initiated navigation away — prevents the watchdog
+  // from firing twice if both paths trip (timer-zero AND ws-close).
+  const navigatedRef = useRef<boolean>(false);
   const [connected, setConnected] = useState(false);
   const [micEnabled, setMicEnabled] = useState(false);
   const [aiSpeaking, setAiSpeaking] = useState(false);
   const [aiThinking, setAiThinking] = useState(false);
   const [userSpeaking, setUserSpeaking] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
+  // Single, parent-owned live tick so the hero timer and the floating
+  // mini-timer ALWAYS show the same digits. Each `CountdownTimer` used to
+  // run its own setInterval and they could drift between server pushes —
+  // the candidate would see, e.g., 00:09 floating and 00:00 hero on the
+  // same page. We tick centrally here and freeze the children's local clocks.
+  const [liveSeconds, setLiveSeconds] = useState<number | null>(null);
+  const liveBaselineRef = useRef<{ seconds: number; t0: number } | null>(null);
   const [currentQ, setCurrentQ] = useState<CurrentQuestion | null>(null);
   const [askedDuration, setAskedDuration] = useState<number | null>(null);
   const [turns, setTurns] = useState<ConversationTurn[]>([]);
@@ -109,11 +125,17 @@ export default function InterviewRoom() {
   // Auto-scroll: follow the conversation as new turns, interim transcripts,
   // and committed answers land. We wait one animation frame so the new DOM
   // node is laid out, then smooth-scroll the window to the bottom of the page.
+  // IMPORTANT: stop following once `ended` is set. Otherwise a late transcript
+  // landing during the 1.2s pre-navigation pause re-pins the document to the
+  // bottom, and AnimatePresence then renders the next page (InterviewComplete)
+  // below the still-mounted exiting page — the candidate sees a blank screen
+  // and has to scroll down to find the completion text.
   const lastTurn = turns[turns.length - 1];
   const lastAnswer = lastTurn?.answer ?? "";
   const lastInterim = lastTurn?.interim ?? "";
   useEffect(() => {
     if (turns.length === 0) return;
+    if (ended) return;
     const id = window.requestAnimationFrame(() => {
       window.scrollTo({
         top: document.documentElement.scrollHeight,
@@ -121,7 +143,7 @@ export default function InterviewRoom() {
       });
     });
     return () => window.cancelAnimationFrame(id);
-  }, [turns.length, lastAnswer, lastInterim]);
+  }, [turns.length, lastAnswer, lastInterim, ended]);
 
   // Show a small floating timer once the hero timer in Zone 1 has scrolled
   // out of view, so the candidate always knows how much time is left.
@@ -198,19 +220,51 @@ export default function InterviewRoom() {
     setMicEnabled(true);
   }, []);
 
-  // Banners — five-minute toast and one-minute banner.
+  // Reset the central live-tick baseline whenever the server pushes a fresh
+  // time_remaining. Both displays read from `liveSeconds` so they stay
+  // perfectly in lockstep instead of each ticking on their own clock.
+  useEffect(() => {
+    if (timeRemaining === null) {
+      liveBaselineRef.current = null;
+      setLiveSeconds(null);
+      return;
+    }
+    liveBaselineRef.current = {
+      seconds: timeRemaining,
+      t0: performance.now(),
+    };
+    setLiveSeconds(timeRemaining);
+  }, [timeRemaining]);
+
+  // Tick the central clock once per second between server pushes. Frozen on
+  // session end so the digits hold at termination.
+  useEffect(() => {
+    if (liveSeconds === null) return;
+    if (ended) return;
+    const id = window.setInterval(() => {
+      const base = liveBaselineRef.current;
+      if (!base) return;
+      const dt = (performance.now() - base.t0) / 1000;
+      setLiveSeconds(Math.max(0, base.seconds - Math.floor(dt)));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [liveSeconds, ended]);
+
+  // Banners — five-minute toast and one-minute banner. Driven by the
+  // central live tick so the banner appears the instant the displayed
+  // digits cross 60s, not just on the next sparse server push.
   const lastBannerRef = useRef<number | null>(null);
   useEffect(() => {
-    if (timeRemaining === null) return;
-    if (timeRemaining <= 60 && timeRemaining > 0) {
+    if (liveSeconds === null) return;
+    if (liveSeconds <= 60 && liveSeconds > 0) {
       setShowOneMinBanner(true);
     } else {
       setShowOneMinBanner(false);
     }
-    const fiveMinKey = Math.floor(timeRemaining / 60);
+    const fiveMinKey = Math.floor(liveSeconds / 60);
     if (
-      timeRemaining > 290 &&
-      timeRemaining < 305 &&
+      liveSeconds > 290 &&
+      liveSeconds < 305 &&
       lastBannerRef.current !== fiveMinKey
     ) {
       lastBannerRef.current = fiveMinKey;
@@ -219,7 +273,85 @@ export default function InterviewRoom() {
         duration: 4000,
       });
     }
-  }, [timeRemaining]);
+  }, [liveSeconds]);
+
+  // Single, idempotent path off the interview page. Both the WS-close
+  // recovery and the timer-zero watchdog funnel through this so we never
+  // navigate twice or leave a poll running after the room unmounts.
+  const goToCompletion = useCallback(() => {
+    if (navigatedRef.current) return;
+    navigatedRef.current = true;
+    if (watchdogRef.current !== null) {
+      window.clearInterval(watchdogRef.current);
+      watchdogRef.current = null;
+    }
+    if (completeRedirectRef.current !== null) {
+      window.clearTimeout(completeRedirectRef.current);
+      completeRedirectRef.current = null;
+    }
+    if (document.fullscreenElement) {
+      document.exitFullscreen?.().catch(() => {});
+    }
+    try {
+      wsRef.current?.close();
+    } catch {
+      /* ignore */
+    }
+    navigate(`/sessions/${sessionId}/complete`);
+  }, [navigate, sessionId]);
+
+  // Start a polling watchdog that checks whether the server has marked the
+  // session completed. Used as a recovery path when the normal close-out
+  // (a `session_ended` JSON frame) didn't arrive — e.g. TTS hang on the
+  // closing line, network blip, or server crash. After `maxAttempts` polls
+  // we navigate anyway so the candidate is never stranded on a frozen page.
+  const startCompletionWatchdog = useCallback(
+    (opts: { intervalMs?: number; maxAttempts?: number; finalNavigate?: boolean } = {}) => {
+      if (navigatedRef.current) return;
+      if (watchdogRef.current !== null) return;
+      const intervalMs = opts.intervalMs ?? 2000;
+      const maxAttempts = opts.maxAttempts ?? 15;
+      const finalNavigate = opts.finalNavigate ?? true;
+      let attempts = 0;
+      watchdogRef.current = window.setInterval(async () => {
+        attempts += 1;
+        try {
+          const r = await api.get(`/sessions/${sessionId}`);
+          if (r.data?.status === "completed") {
+            goToCompletion();
+            return;
+          }
+        } catch {
+          /* keep polling */
+        }
+        if (attempts >= maxAttempts) {
+          if (watchdogRef.current !== null) {
+            window.clearInterval(watchdogRef.current);
+            watchdogRef.current = null;
+          }
+          if (finalNavigate) goToCompletion();
+        }
+      }, intervalMs);
+    },
+    [goToCompletion, sessionId],
+  );
+
+  // Timer-zero watchdog: when the live clock hits 0 we expect a
+  // `session_ended` frame from the server within ~5 seconds. If it never
+  // arrives (the most common stuck-on-page failure), kick off the polling
+  // recovery so the candidate is moved to the completion screen anyway.
+  useEffect(() => {
+    if (liveSeconds === null) return;
+    if (liveSeconds > 0) return;
+    if (ended) return;
+    if (expiryWatchdogArmedRef.current) return;
+    expiryWatchdogArmedRef.current = true;
+    const t = window.setTimeout(() => {
+      if (navigatedRef.current || ended) return;
+      startCompletionWatchdog({ intervalMs: 2000, maxAttempts: 8 });
+    }, 5000);
+    return () => window.clearTimeout(t);
+  }, [liveSeconds, ended, startCompletionWatchdog]);
 
   // Open WebSocket once preflight is satisfied AND the candidate has
   // acknowledged the room rules (and triggered fullscreen).
@@ -360,7 +492,7 @@ export default function InterviewRoom() {
                   window.clearTimeout(completeRedirectRef.current);
                 }
                 completeRedirectRef.current = window.setTimeout(() => {
-                  navigate(`/sessions/${sessionId}/complete`);
+                  goToCompletion();
                 }, 1200);
               }
               if (document.fullscreenElement) {
@@ -390,20 +522,12 @@ export default function InterviewRoom() {
       // Belt-and-braces: if the WS closed without a prior `session_ended`
       // (TTS hang, network blip, server crash), the candidate would
       // otherwise stay stuck on the interview page even though the server
-      // has already marked the session completed. Poll /sessions/:id once
-      // and navigate to the completion screen if it's done.
-      if (completeRedirectRef.current !== null) return;
-      const navAfterCheck = window.setTimeout(async () => {
-        try {
-          const r = await api.get(`/sessions/${sessionId}`);
-          if (r.data?.status === "completed") {
-            navigate(`/sessions/${sessionId}/complete`);
-          }
-        } catch {
-          // ignore — leave the user where they are
-        }
-      }, 1500);
-      completeRedirectRef.current = navAfterCheck;
+      // has already marked the session completed. Poll /sessions/:id on
+      // a short interval and navigate to the completion screen as soon as
+      // the server reports completed; after the cap, navigate anyway so
+      // the candidate is never stranded.
+      if (navigatedRef.current) return;
+      startCompletionWatchdog({ intervalMs: 2000, maxAttempts: 15 });
     };
 
     ws.onerror = () =>
@@ -415,6 +539,10 @@ export default function InterviewRoom() {
         window.clearTimeout(completeRedirectRef.current);
         completeRedirectRef.current = null;
       }
+      if (watchdogRef.current !== null) {
+        window.clearInterval(watchdogRef.current);
+        watchdogRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preflightDone, rulesAcknowledged, sessionId, token]);
@@ -425,10 +553,21 @@ export default function InterviewRoom() {
   }, [ended]);
 
   const confirmEndSession = useCallback(() => {
-    wsRef.current?.send(JSON.stringify({ type: "end_session" }));
     setMicEnabled(false);
     setEndConfirmOpen(false);
-  }, []);
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "end_session" }));
+      // If the server doesn't answer with `session_ended` shortly, fall
+      // back to polling so the candidate isn't stuck staring at this room.
+      startCompletionWatchdog({ intervalMs: 2000, maxAttempts: 8 });
+    } else {
+      // WS already dead — navigate straight to completion. The server has
+      // most likely flipped the session to completed already; the
+      // completion page handles the still-pending case gracefully.
+      goToCompletion();
+    }
+  }, [goToCompletion, startCompletionWatchdog]);
 
   const cancelEndSession = useCallback(() => {
     setEndConfirmOpen(false);
@@ -493,7 +632,7 @@ export default function InterviewRoom() {
       </AnimatePresence>
 
       {/* Vermillion line that draws across when under 30 seconds */}
-      {timeRemaining !== null && timeRemaining <= 30 && timeRemaining > 0 && (
+      {liveSeconds !== null && liveSeconds <= 30 && liveSeconds > 0 && (
         <div className="fixed left-0 right-0 top-0 z-20 h-[2px] bg-accent" />
       )}
 
@@ -508,7 +647,9 @@ export default function InterviewRoom() {
             <Eyebrow className="text-ink-muted">·</Eyebrow>
             <Eyebrow className="text-ink-muted">SOFTWARE ENGINEER MOCK</Eyebrow>
           </div>
-          <CountdownTimer seconds={timeRemaining} size="lg" announce frozen={ended} />
+          {/* `frozen` is on so CountdownTimer doesn't run its own
+              setInterval — the parent owns the live tick (liveSeconds). */}
+          <CountdownTimer seconds={liveSeconds} size="lg" announce frozen />
           <div className="mt-6 flex items-center justify-center gap-4 font-mono text-eyebrow text-ink-muted">
             <span className="h-px w-12 bg-rule-strong" />
             REMAINING
@@ -646,25 +787,31 @@ export default function InterviewRoom() {
       </main>
 
       {/* Floating mini-timer — appears once the hero timer is scrolled past
-          so the candidate can always see how much time is left. */}
+          so the candidate can always see how much time is left. While the
+          ONE MINUTE banner is up it slides BELOW the banner (not under it)
+          so both stay readable instead of stacking on the same row. */}
       <AnimatePresence>
         {showFloatingTimer && (
           <motion.div
             key="floating-timer"
             initial={{ y: -16, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
+            animate={{
+              y: 0,
+              opacity: 1,
+              top: showOneMinBanner && !ended ? 64 : 24,
+            }}
             exit={{ y: -16, opacity: 0 }}
             transition={{ duration: durations.base, ease: easeEditorial }}
-            className="fixed right-6 top-6 z-30 flex items-center gap-3 rounded-full border border-rule bg-canvas-elevated/95 px-4 py-2 shadow-sm backdrop-blur"
+            className="fixed right-6 z-40 flex items-center gap-3 rounded-full border border-rule bg-canvas-elevated/95 px-4 py-2 shadow-sm backdrop-blur"
             role="status"
           >
             <span className="font-mono text-eyebrow text-ink-muted">
               {ended ? "ENDED" : "REMAINING"}
             </span>
             <CountdownTimer
-              seconds={timeRemaining}
+              seconds={liveSeconds}
               size="sm"
-              frozen={ended}
+              frozen
             />
           </motion.div>
         )}

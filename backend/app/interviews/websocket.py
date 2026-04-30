@@ -94,10 +94,28 @@ async def interview_ws(
             await websocket.close()
             return
 
-        plan = (session.questions_plan or {}).get("questions", [])
-        resume_summary = _build_resume_summary(session.resume)
+        plan_payload = session.questions_plan or {}
+        plan = plan_payload.get("questions", [])
+        # Mode is stored on the session by the route that creates it. Default
+        # to "resume_based" for backwards compatibility with sessions created
+        # before the mode field existed.
+        mode = plan_payload.get("mode") or "resume_based"
 
-        orch = SessionOrchestrator(session, plan, resume_summary, db)
+        # Resume isolation per mode:
+        #   - resume_based: full resume context for plan AND follow-ups.
+        #   - predefined / ai_generated / jd_based: the question PLAN was
+        #     generated without resume input (predefined comes from the
+        #     creator; ai_generated and jd_based are explicitly resume-free).
+        #     Suppressing resume_summary in follow-ups keeps the live agent
+        #     tonally consistent with the plan it was given — no surprise
+        #     references to companies or projects the candidate's resume
+        #     happens to mention.
+        if mode == "resume_based":
+            resume_summary = _build_resume_summary(session.resume)
+        else:
+            resume_summary = ""
+
+        orch = SessionOrchestrator(session, plan, resume_summary, db, mode=mode)
 
         send_lock = asyncio.Lock()
 
