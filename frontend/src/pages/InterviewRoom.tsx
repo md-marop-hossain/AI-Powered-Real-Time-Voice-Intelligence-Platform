@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
@@ -353,6 +353,16 @@ export default function InterviewRoom() {
     return () => window.clearTimeout(t);
   }, [liveSeconds, ended, startCompletionWatchdog]);
 
+  // Scroll to top the moment the interview room renders for the first time
+  // (when rulesAcknowledged flips true). useLayoutEffect fires before paint,
+  // preventing the candidate from ever seeing the timer partially above the
+  // fold. The click-handler scrollTo alone isn't sufficient because the
+  // fullscreen transition is async and can re-layout the page after it fires.
+  useLayoutEffect(() => {
+    if (!rulesAcknowledged) return;
+    window.scrollTo(0, 0);
+  }, [rulesAcknowledged]);
+
   // Open WebSocket once preflight is satisfied AND the candidate has
   // acknowledged the room rules (and triggered fullscreen).
   useEffect(() => {
@@ -586,6 +596,10 @@ export default function InterviewRoom() {
     el.requestFullscreen?.().catch((err) => {
       console.warn("Fullscreen request rejected:", err);
     });
+    // Reset scroll before the interview room renders — the rules page can be
+    // tall enough that scrollY > 0 carries over (pathname doesn't change so
+    // App.tsx's useLayoutEffect scroll-reset doesn't fire here).
+    window.scrollTo(0, 0);
     setRulesAcknowledged(true);
   }, []);
 
