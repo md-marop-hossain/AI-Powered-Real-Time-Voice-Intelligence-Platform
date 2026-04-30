@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.interviews.agent import decide_next_turn
+from app.invites.service import mark_invitee_completed_for_session
 from app.models.session import Session, SessionStatus
 from app.models.turn import Turn
 from app.scoring.aggregator import aggregate_session_scores
@@ -341,6 +342,7 @@ class SessionOrchestrator:
         self.session.status = SessionStatus.completed
         self.session.ended_at = datetime.now(timezone.utc)
         await self._aggregate_final_scores()
+        await mark_invitee_completed_for_session(self.db, self.session)
         await self.db.commit()
         return {
             "decision": "end_section",
@@ -358,6 +360,7 @@ class SessionOrchestrator:
             self.session.status = SessionStatus.completed
             self.session.ended_at = datetime.now(timezone.utc)
             await self._aggregate_final_scores()
+            await mark_invitee_completed_for_session(self.db, self.session)
             await self.db.commit()
 
     async def record_focus_violation(self, reason: str) -> dict:

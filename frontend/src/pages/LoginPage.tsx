@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -23,8 +23,17 @@ const schema = z.object({
 
 type LoginForm = z.infer<typeof schema>;
 
+function safeRedirectTarget(raw: string | null): string {
+  // Only allow same-origin paths (/foo/bar) to prevent open-redirect.
+  if (!raw) return "/dashboard";
+  if (!raw.startsWith("/") || raw.startsWith("//")) return "/dashboard";
+  return raw;
+}
+
 export default function LoginPage() {
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const redirectTo = safeRedirectTarget(params.get("redirect"));
   const [loading, setLoading] = useState(false);
   const setTokens = useAuthStore((s) => s.setTokens);
   const setUser = useAuthStore((s) => s.setUser);
@@ -42,7 +51,7 @@ export default function LoginPage() {
       setTokens(r.data.access_token, r.data.refresh_token);
       const me = await api.get("/auth/me");
       setUser(me.data);
-      navigate("/dashboard");
+      navigate(redirectTo);
     } catch (e: any) {
       const status = e.response?.status;
       const detail = e.response?.data?.detail;
@@ -69,7 +78,7 @@ export default function LoginPage() {
       setTokens(r.data.access_token, r.data.refresh_token);
       const me = await api.get("/auth/me");
       setUser(me.data);
-      navigate("/dashboard");
+      navigate(redirectTo);
     } catch (e: any) {
       toast.error(e.response?.data?.detail ?? "Google didn't let us through.");
     }
@@ -90,7 +99,14 @@ export default function LoginPage() {
       footnote={
         <>
           New here?{" "}
-          <Link to="/signup" className="editorial-link text-ink">
+          <Link
+            to={
+              redirectTo === "/dashboard"
+                ? "/signup"
+                : `/signup?redirect=${encodeURIComponent(redirectTo)}`
+            }
+            className="editorial-link text-ink"
+          >
             Begin rehearsing
           </Link>
         </>

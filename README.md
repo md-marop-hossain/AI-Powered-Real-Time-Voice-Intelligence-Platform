@@ -7,7 +7,8 @@ A full-stack web app where a candidate uploads their resume and an AI voice agen
 - **Data:** Postgres + pgvector, Redis, MinIO (all via docker-compose)
 - **AI:** Pluggable LLM provider (Groq / OpenAI), Deepgram streaming STT, ElevenLabs / OpenAI streaming TTS
 - **Auth:** Email/password with **6-digit OTP email verification**, Google OAuth, JWT access + refresh
-- **Email:** Gmail SMTP for OTP and password reset (real, branded HTML emails)
+- **Email:** Gmail SMTP for OTP, password reset, **and interview invitations** (real, branded HTML emails)
+- **Invitations:** Creators invite candidates by email with tokenized links, attempt + expiry control, three question-source modes (predefined / AI-generated / job-description-based), creator dashboard, per-candidate report visibility
 
 ---
 
@@ -193,6 +194,10 @@ SMTP_PASSWORD=xxxxxxxxxxxxxxxx           # 16-char Gmail App Password (no spaces
 # Frontend URL (used in email links)
 FRONTEND_URL=http://localhost:5173
 CORS_ORIGINS=http://localhost:5173
+
+# Invitations (defaults shown; override per environment if needed)
+INVITE_EXPIRY_HOURS=24
+INVITE_MAX_ATTEMPTS=1
 ```
 
 #### 3d. Update `alembic.ini`
@@ -317,6 +322,29 @@ OPENAI_API_KEY=sk-...
 8. Open the report — overall score, per-dimension chart, per-question breakdown with a downloadable PDF
 9. Use the theme toggle (top-right) to switch between dark and light mode (dark is the default)
 
+### Invite someone else to take an interview
+
+The navbar's **Invites** entry routes to the creator dashboard. From there:
+
+1. Click **Create a new invite** (`/invite`).
+2. Add one or more candidate emails (comma / space / newline separated).
+3. Pick the **question source mode**:
+   - **Predefined** — type your own question list.
+   - **AI-generated** — system builds 6–10 questions from role + seniority + focus + optional extra instructions.
+   - **Job description** — paste a JD and the system extracts an interview from it.
+4. Set role / seniority / focus / industry / duration. These still drive follow-up depth and scoring calibration even in predefined mode.
+5. **Send invitations** — the server creates one `InterviewInvite` (with its own token, expiry, and attempt counter) per email, persists the question set, and dispatches branded emails.
+6. Each candidate clicks their link → `/invite/{token}` validates the token and shows interview details. If they're not signed in, they're redirected through `/login?redirect=/invite/{token}` and bounced back after auth. **The signed-in account email must match the address that was invited** — if it doesn't, the page surfaces a "Switch account" prompt and the server returns 403 on `/start`.
+7. Starting the interview creates a `Session` linked to the invite, with the stored `questions_plan` already populated, so the existing WebSocket interview flow runs unchanged.
+8. Back on the creator dashboard (`/invites`) you can see each invite's lifecycle (`ACTIVE / EXPIRED / USED`) and completion count. Drilling in (`/invites/{id}/results`) shows per-candidate scores and links straight to the existing report page — invite creators can view candidate sessions and reports thanks to the read-access carve-out in `_user_can_view_session`.
+
+ENV variables for invitations (overridable in `backend/.env`):
+
+```env
+INVITE_EXPIRY_HOURS=24
+INVITE_MAX_ATTEMPTS=1
+```
+
 ---
 
 ## Architecture
@@ -349,7 +377,9 @@ mock-interview-ai/
 │   └── src/
 │       ├── pages/        # Landing, Login, Signup, VerifyEmail, ForgotPassword,
 │       │                 # ResetPassword, Dashboard, Upload, InterviewRoom,
-│       │                 # InterviewComplete, Report, Account, NotFound
+│       │                 # InterviewComplete, Report, Account, NotFound,
+│       │                 # CreateInvite, InviteLanding, InvitesDashboard,
+│       │                 # InviteResults
 │       ├── components/
 │       │   ├── editorial/  # design-system primitives: buttons, inputs,
 │       │   │               # ConfirmDialog, ThemeToggle, Eyebrow, …
@@ -367,13 +397,16 @@ mock-interview-ai/
 │   │   ├── auth/         # routes (register, verify-email, resend-otp, login, google, refresh, reset)
 │   │   ├── resumes/      # upload, parsing (pypdf/python-docx), embeddings
 │   │   ├── interviews/   # orchestrator, agent, STT/TTS clients, WebSocket
+│   │   ├── invites/      # invitation system: token validation, question-set
+│   │   │                 # builders (predefined / AI / JD), routes
 │   │   ├── scoring/      # rubric aggregation (4 dimensions per turn)
 │   │   ├── reports/      # WeasyPrint PDF generation
 │   │   ├── models/       # SQLAlchemy: User, Session, Turn, Resume, Report,
-│   │   │                 # EmailVerificationToken, PasswordResetToken
-│   │   ├── schemas/      # Pydantic
+│   │   │                 # EmailVerificationToken, PasswordResetToken,
+│   │   │                 # QuestionSet, InterviewInvite, Invitee
+│   │   ├── schemas/      # Pydantic (auth, resume, session, invite)
 │   │   └── workers/      # Celery tasks (resume parsing offload)
-│   ├── alembic/          # DB migrations (0001–0004)
+│   ├── alembic/          # DB migrations (0001–0005; 0005 adds invitations)
 │   └── pyproject.toml
 └── docker-compose.yml
 ```
@@ -398,6 +431,11 @@ mock-interview-ai/
 | POST | `/api/v1/sessions/{id}/end` | End session, finalize scores |
 | DELETE | `/api/v1/sessions/{id}` | Delete session + report PDF |
 | GET  | `/api/v1/sessions/{id}/report` | Final scored report (lazy PDF gen) |
+| POST | `/api/v1/invites` | Create invitations (one per email) + send emails |
+| GET  | `/api/v1/invites` | Creator dashboard list |
+| GET  | `/api/v1/invites/{token}` | Public landing — validate token, show invite info |
+| POST | `/api/v1/invites/{token}/start` | Candidate starts the interview (auth + email-match required) |
+| GET  | `/api/v1/invites/{id}/results` | Creator-only — per-candidate result rows |
 | WS   | `/ws/interview/{id}?token=JWT` | Bidirectional audio + control |
 
 ---

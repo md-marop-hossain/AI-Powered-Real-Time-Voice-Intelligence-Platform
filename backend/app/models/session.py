@@ -34,6 +34,12 @@ class Session(Base):
         ForeignKey("interview_templates.id", ondelete="SET NULL"),
         nullable=True,
     )
+    invite_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("interview_invites.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     role: Mapped[str] = mapped_column(String(255), nullable=False)
     seniority: Mapped[str | None] = mapped_column(String(32), nullable=True)
     focus: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -60,6 +66,7 @@ class Session(Base):
 
     user = relationship("User", back_populates="sessions")
     resume = relationship("Resume", back_populates="sessions")
+    invite = relationship("InterviewInvite", back_populates="sessions")
     turns = relationship(
         "Turn",
         back_populates="session",

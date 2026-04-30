@@ -13,11 +13,18 @@ Full-stack web app where a candidate uploads a resume and an AI voice agent runs
 ## Layout
 
 - [backend/app/](backend/app/) — FastAPI app
-  - `interviews/` — agent, orchestrator, websocket, stt
-  - `auth/`, `users/`, `resumes/`, `db/`
-- [backend/alembic/](backend/alembic/) — DB migrations
+  - `interviews/` — agent, orchestrator, websocket, stt, tts
+  - `invites/` — invitation system: token validation, question-set builders (predefined / AI / JD), routes
+  - `auth/`, `resumes/`, `reports/`, `scoring/`, `core/`, `models/`, `schemas/`
+- [backend/alembic/](backend/alembic/) — DB migrations (`0001`–`0005`; `0005_invitations` adds `question_sets`, `interview_invites`, `invitees` + `sessions.invite_id`)
 - [backend/tests/](backend/tests/) — pytest suite (`asyncio_mode = "auto"`)
 - [frontend/src/](frontend/src/) — React app
+  - `pages/` — includes `CreateInvitePage`, `InviteLandingPage`, `InvitesDashboardPage`, `InviteResultsPage` for the invitation flow
+
+## Notable features
+
+- **Live interview** with patient turn-taking, soft nudges, follow-up cap, stop-intent detection, focus-integrity checks (3-strike limit), auto-end on timer.
+- **Invitation system** — creators send tokenized email invites tied to a `QuestionSet` (predefined / AI-generated / JD-based). Candidates authenticate, the system enforces `current_user.email == invitee.email` on `/start`, attempts decrement on completion, and `Session.invite_id` links results back to the creator's dashboard.
 
 ## Common commands
 

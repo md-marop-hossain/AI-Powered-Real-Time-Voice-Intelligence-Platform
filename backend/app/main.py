@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.core.storage import ensure_bucket
 from app.interviews.routes import router as sessions_router
 from app.interviews.websocket import router as ws_router
+from app.invites.routes import router as invites_router
 from app.resumes.routes import router as resumes_router
 
 
@@ -49,4 +50,5 @@ async def health() -> dict:
 app.include_router(auth_router, prefix=settings.API_V1_PREFIX)
 app.include_router(resumes_router, prefix=settings.API_V1_PREFIX)
 app.include_router(sessions_router, prefix=settings.API_V1_PREFIX)
+app.include_router(invites_router, prefix=settings.API_V1_PREFIX)
 app.include_router(ws_router)  # /ws/interview/{session_id}

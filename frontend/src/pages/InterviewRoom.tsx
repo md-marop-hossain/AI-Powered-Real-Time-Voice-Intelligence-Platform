@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 
+import { api } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
 import { useMicStream } from "@/hooks/useMicStream";
 import { useAudioPlayer } from "@/hooks/useAudioPlayer";
@@ -385,6 +386,24 @@ export default function InterviewRoom() {
     ws.onclose = () => {
       setConnected(false);
       setMicEnabled(false);
+
+      // Belt-and-braces: if the WS closed without a prior `session_ended`
+      // (TTS hang, network blip, server crash), the candidate would
+      // otherwise stay stuck on the interview page even though the server
+      // has already marked the session completed. Poll /sessions/:id once
+      // and navigate to the completion screen if it's done.
+      if (completeRedirectRef.current !== null) return;
+      const navAfterCheck = window.setTimeout(async () => {
+        try {
+          const r = await api.get(`/sessions/${sessionId}`);
+          if (r.data?.status === "completed") {
+            navigate(`/sessions/${sessionId}/complete`);
+          }
+        } catch {
+          // ignore — leave the user where they are
+        }
+      }, 1500);
+      completeRedirectRef.current = navAfterCheck;
     };
 
     ws.onerror = () =>
