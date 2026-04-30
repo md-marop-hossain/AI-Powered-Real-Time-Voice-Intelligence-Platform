@@ -15,10 +15,10 @@ const applyAttribute = (theme: Theme) => {
 };
 
 const detectInitial = (): Theme => {
-  if (typeof window === "undefined") return "light";
-  return window.matchMedia?.("(prefers-color-scheme: dark)").matches
-    ? "dark"
-    : "light";
+  if (typeof window === "undefined") return "dark";
+  return window.matchMedia?.("(prefers-color-scheme: light)").matches
+    ? "light"
+    : "dark";
 };
 
 export const useThemeStore = create<ThemeState>()(
