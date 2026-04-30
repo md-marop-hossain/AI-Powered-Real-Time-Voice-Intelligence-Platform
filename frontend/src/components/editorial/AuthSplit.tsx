@@ -63,7 +63,7 @@ export function AuthSplit({ eyebrow, heading, sub, formTitle, children, footnote
                 initial: { opacity: 0, y: 24 },
                 animate: { opacity: 1, y: 0, transition: { duration: durations.slow, ease: easeEditorial } },
               }}
-              className="text-hero text-ink"
+              className="text-display text-ink"
             >
               {heading}
             </motion.h1>
