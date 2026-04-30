@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.interviews.agent import decide_next_turn
 from app.models.session import Session, SessionStatus
 from app.models.turn import Turn
+from app.scoring.aggregator import aggregate_session_scores
 
 log = logging.getLogger(__name__)
 
@@ -317,10 +318,29 @@ class SessionOrchestrator:
                 "is_nudge": False,
             }
 
+    async def _aggregate_final_scores(self) -> None:
+        """Populate session.final_scores from the persisted turns.
+
+        The dashboard's avg-score stat reads session.final_scores; without this
+        the WS-driven end paths (timer, stop-intent, focus violations,
+        end_section) would leave the field NULL and skew the average to "—".
+        Turns aren't eagerly loaded on self.session, so query them directly.
+        """
+        res = await self.db.execute(
+            select(Turn).where(Turn.session_id == self.session.id)
+        )
+        turns = res.scalars().all()
+        try:
+            self.session.final_scores = aggregate_session_scores(turns)
+        except Exception as e:
+            log.warning("final_scores aggregation failed for session %s: %s",
+                        self.session.id, e)
+
     async def _end_session(self, closing_text: str) -> dict:
         self.ended = True
         self.session.status = SessionStatus.completed
         self.session.ended_at = datetime.now(timezone.utc)
+        await self._aggregate_final_scores()
         await self.db.commit()
         return {
             "decision": "end_section",
@@ -337,6 +357,7 @@ class SessionOrchestrator:
         if self.session.status != SessionStatus.completed:
             self.session.status = SessionStatus.completed
             self.session.ended_at = datetime.now(timezone.utc)
+            await self._aggregate_final_scores()
             await self.db.commit()
 
     async def record_focus_violation(self, reason: str) -> dict:
