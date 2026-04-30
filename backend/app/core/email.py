@@ -137,6 +137,67 @@ async def send_otp_email(to_email: str, code: str, full_name: str) -> None:
     await FastMail(conf).send_message(message)
 
 
+async def send_invite_email(
+    to_email: str,
+    invite_url: str,
+    role: str,
+    duration_minutes: int,
+    expires_at_human: str,
+    inviter_name: str | None = None,
+) -> None:
+    """Send an interview invitation link to a candidate."""
+    inviter = inviter_name or "Someone"
+    preheader = (
+        f"{inviter} invited you to a {role} mock interview on {BRAND_NAME}. "
+        f"Link expires {expires_at_human}."
+    )
+    content = f"""
+        <p style="margin:0 0 8px 0;font-size:11px;letter-spacing:0.18em;text-transform:uppercase;color:{INK_MUTED};">
+          You're invited
+        </p>
+        <h1 style="margin:0 0 24px 0;font-family:Georgia,'Times New Roman',serif;font-size:32px;font-weight:400;line-height:1.2;color:{INK};letter-spacing:-0.01em;">
+          A mock interview is waiting for you.
+        </h1>
+        <p style="margin:0 0 24px 0;font-size:15px;line-height:1.7;color:{INK_SOFT};">
+          {inviter} has invited you to a <strong style="color:{INK};">{role}</strong> mock
+          interview on {BRAND_NAME}. The session runs about
+          <strong style="color:{INK};">{duration_minutes} minutes</strong> and is conducted by
+          our AI voice interviewer — you'll just need a quiet room and a working mic.
+        </p>
+        <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin:0 0 32px 0;">
+          <tr>
+            <td align="center" style="background:{INK};border-radius:2px;">
+              <a href="{invite_url}" style="display:inline-block;padding:14px 28px;font-size:12px;font-weight:600;letter-spacing:0.18em;text-transform:uppercase;color:#ffffff;text-decoration:none;">
+                Start interview &rarr;
+              </a>
+            </td>
+          </tr>
+        </table>
+        <p style="margin:0 0 8px 0;font-size:13px;line-height:1.6;color:{INK_MUTED};">
+          Or paste this link into your browser:
+        </p>
+        <p style="margin:0 0 24px 0;font-size:12px;line-height:1.5;color:{INK_SOFT};word-break:break-all;font-family:'SF Mono','Menlo','Consolas',monospace;background:{CANVAS};padding:12px 14px;border:1px solid {RULE};border-radius:3px;">
+          {invite_url}
+        </p>
+        <p style="margin:0 0 4px 0;font-size:13px;line-height:1.7;color:{INK_SOFT};">
+          <strong style="color:{INK};">Heads up:</strong> the link expires on
+          <strong style="color:{INK};">{expires_at_human}</strong> and can be used a limited
+          number of times. If you're not signed in already, you'll be asked to log in or sign
+          up before the interview begins.
+        </p>
+        <p style="margin:24px 0 0 0;padding-top:24px;border-top:1px solid {RULE};font-size:13px;line-height:1.7;color:{INK_MUTED};">
+          Not expecting this? You can safely ignore the email.
+        </p>
+    """
+    message = MessageSchema(
+        subject=f"{inviter} invited you to a mock interview on {BRAND_NAME}",
+        recipients=[to_email],
+        body=_layout(preheader, content),
+        subtype=MessageType.html,
+    )
+    await FastMail(conf).send_message(message)
+
+
 async def send_password_reset_email(to_email: str, reset_token: str, full_name: str) -> None:
     reset_link = f"{settings.FRONTEND_URL}/reset-password?token={reset_token}"
     preheader = f"Reset your {BRAND_NAME} password. This link expires in 1 hour."

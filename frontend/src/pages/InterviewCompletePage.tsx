@@ -1,11 +1,9 @@
 import { useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { motion } from "framer-motion";
 
 import { Eyebrow } from "@/components/editorial/Eyebrow";
 import { EditorialButton } from "@/components/editorial/EditorialButton";
 import { HairlineDivider } from "@/components/editorial/HairlineDivider";
-import { durations, easeEditorial } from "@/lib/motion";
 
 export default function InterviewCompletePage() {
   const { sessionId } = useParams();
@@ -20,12 +18,7 @@ export default function InterviewCompletePage() {
   return (
     <div className="min-h-screen bg-canvas">
       <main className="editorial-container flex min-h-screen flex-col items-center justify-center py-16 text-center md:py-24">
-        <motion.div
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: durations.base, ease: easeEditorial }}
-          className="flex w-full max-w-2xl flex-col items-center"
-        >
+        <div className="flex w-full max-w-2xl flex-col items-center">
           <Eyebrow className="text-accent">INTERVIEW COMPLETE</Eyebrow>
 
           <h1 className="mt-8 font-display text-[40px] leading-tight text-ink md:text-[52px]">
@@ -67,7 +60,7 @@ export default function InterviewCompletePage() {
               Back to dashboard
             </EditorialButton>
           </div>
-        </motion.div>
+        </div>
       </main>
     </div>
   );

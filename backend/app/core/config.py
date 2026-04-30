@@ -67,6 +67,10 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
     PROJECT_NAME: str = "AI Mock Interview"
 
+    # --- Invitations ---
+    INVITE_EXPIRY_HOURS: int = 24
+    INVITE_MAX_ATTEMPTS: int = 1
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]

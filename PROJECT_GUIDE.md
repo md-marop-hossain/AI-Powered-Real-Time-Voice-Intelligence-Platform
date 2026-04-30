@@ -41,6 +41,18 @@ feedback and a downloadable PDF.
 End-to-end the user never has to type — the conversation is voice
 both ways.
 
+A second flow lets any signed-in user **invite other candidates**
+to take a specific interview by email: the creator picks the
+question source (their own list, AI-generated, or extracted from
+a job description), sends links to one or more email addresses,
+and watches results land in a creator dashboard. Each invitee gets
+a tokenized URL with its own expiry and attempt counter; the server
+enforces that the signed-in account email matches the invited
+address before the interview can start. The candidate's session
+runs through the same WebSocket loop as a self-started interview —
+the invitation system only changes how the question plan is
+sourced and how results are surfaced back to the creator.
+
 ---
 
 ## 2. Big-picture architecture
@@ -92,16 +104,30 @@ backend/app/
 │                          compute embeddings (sentence-transformers)
 ├── interviews/
 │   ├── routes.py          REST: create session, end, get report
-│   ├── websocket.py       WS endpoint /ws/interview/{id}
+│   │                      (read endpoints honour invite-creator access)
+│   ├── websocket.py       WS endpoint /ws/interview/{id} — bounded
+│   │                      speak()/ai_audio_end/session_ended sends
 │   ├── orchestrator.py    Per-session state machine, nudge cap,
-│   │                      stop-intent detection, focus-violation logic
+│   │                      stop-intent detection, focus-violation logic,
+│   │                      invitee-completion hook on session end
 │   ├── agent.py           LLM prompts: question plan + decide_next_turn
 │   ├── stt.py             Deepgram streaming STT wrapper
 │   └── tts.py             Streaming TTS (ElevenLabs OR OpenAI)
+├── invites/
+│   ├── routes.py          POST /invites, GET /invites,
+│   │                      GET/POST /invites/{token}, /{id}/results
+│   ├── service.py         Token gen, validation, attempt accounting,
+│   │                      mark_invitee_completed_for_session hook
+│   └── question_sets.py   Three builders: predefined, ai_generated,
+│                          jd_based — all return the agent's plan shape
 ├── scoring/aggregator.py  Per-dimension averaging across turns
 ├── reports/generator.py   Build summary dict + WeasyPrint PDF
-├── models/                SQLAlchemy ORM models
-├── schemas/               Pydantic request/response shapes
+├── models/                SQLAlchemy ORM models — User, Session, Turn,
+│                          Resume, Report, EmailVerificationToken,
+│                          PasswordResetToken, QuestionSet,
+│                          InterviewInvite, Invitee
+├── schemas/               Pydantic request/response shapes (auth,
+│                          resume, session, invite)
 └── workers/               Celery tasks (resume parsing offload)
 ```
 
@@ -135,6 +161,11 @@ frontend/src/
 │   ├── InterviewCompletePage (post-session interstitial → report)
 │   ├── ReportPage          (final scored report)
 │   ├── AccountPage         (profile + password change)
+│   ├── CreateInvitePage      (creator: emails + question source + role/seniority/...)
+│   ├── InviteLandingPage     (public: validate token, "switch account"
+│   │                          UX when signed-in email ≠ invited email)
+│   ├── InvitesDashboardPage  (creator: list of campaigns, lifecycle)
+│   ├── InviteResultsPage     (creator: per-candidate scores → report links)
 │   └── NotFoundPage        (404)
 ├── components/
 │   ├── editorial/          Design-system primitives — AuthSplit,
@@ -448,6 +479,50 @@ your interviewer persona — flip `TTS_PROVIDER` and try a session.
   actions (end session, etc.); Esc closes, click-outside closes,
   body scroll locked, autofocus on cancel
 
+### Interview invitations
+
+- **Creator dashboard** (`/invites`) — list of every campaign the
+  signed-in user has sent, with lifecycle (`ACTIVE / EXPIRED /
+  USED`) and `done/total` candidate counts.
+- **Create invite** (`/invite`) — accepts one or many emails
+  (comma / space / newline separated). Each email yields its own
+  `InterviewInvite` row with a 32-byte URL-safe token, configurable
+  expiry (default `INVITE_EXPIRY_HOURS=24`), and attempt limit
+  (default `INVITE_MAX_ATTEMPTS=1`).
+- **Three question-source modes**, all stored as a `QuestionSet`:
+  - **Predefined** — creator types the questions themselves.
+  - **AI-generated** — LLM produces 6–10 questions from role +
+    seniority + focus + optional extra instructions.
+  - **Job-description-based** — LLM extracts an interview from a
+    pasted JD.
+- **Branded email** sent via the existing SMTP path
+  (`send_invite_email` in `core/email.py`) with the personal link,
+  expiry, and brief instructions.
+- **Public landing** (`/invite/{token}`) — validates the token
+  (server returns 404 / 410 with a stable error code for
+  `not_found / revoked / expired / no_attempts`). When the visitor
+  is logged out, "Sign in to continue" routes through
+  `/login?redirect=/invite/{token}`; the redirect threads through
+  signup → verify-email so the user lands back on the invite after
+  completing whichever auth flow they need.
+- **Strict email-match enforcement** on `POST
+  /invites/{token}/start` — the signed-in account's email must
+  equal an invitee row on the invite, else 403. The frontend mirrors
+  this with a "Switch account" panel that signs out and bounces
+  through login again.
+- **Session continuity** — `/start` creates a `Session` populated
+  with the stored `questions_plan` and `invite_id`, so the existing
+  WebSocket interview loop runs unchanged.
+- **Attempt accounting** — `attempts_used` increments on `/start`,
+  candidate is denied once it hits `max_attempts`. Session
+  completion (any termination path — LLM `end_section`, stop-intent,
+  timer, focus violations, manual end) flips the candidate's
+  `Invitee` row to `completed` via `mark_invitee_completed_for_session`.
+- **Creator visibility** — creators of an invite can read the
+  candidate's session and report (`_user_can_view_session` in
+  `interviews/routes.py`), so the dashboard's "View report" link
+  works without granting write access.
+
 ### Scoring and report
 
 - Each real turn (not nudges) is scored on four dimensions:
@@ -477,8 +552,10 @@ your interviewer persona — flip `TTS_PROVIDER` and try a session.
 ### Operational
 
 - Docker Compose for Postgres + pgvector, Redis, MinIO, MailHog
-- Alembic migrations (`0001`–`0004`: initial schema, email
-  verification tokens, session metadata, focus violations)
+- Alembic migrations (`0001`–`0005`: initial schema, email
+  verification tokens, session metadata, focus violations,
+  invitations — `question_sets`, `interview_invites`, `invitees`,
+  `sessions.invite_id`)
 - Structured logging
 - Pydantic settings with `.env` loading
 - Frontend type-checked with `tsc --noEmit`
@@ -784,8 +861,10 @@ cd frontend && npm install
 | `SMTP_PORT` | `1025` | `587` for Gmail |
 | `SMTP_USER` / `SMTP_PASSWORD` | – | Gmail App Password (16 chars, no spaces) |
 | `SMTP_FROM` | – | sender email |
-| `FRONTEND_URL` | `http://localhost:5173` | used in email links |
+| `FRONTEND_URL` | `http://localhost:5173` | used in email links (incl. invitation URLs) |
 | `CORS_ORIGINS` | `http://localhost:5173` | comma-separated allow-list |
+| `INVITE_EXPIRY_HOURS` | `24` | Default expiry for newly-created interview invites; per-invite override accepted on `POST /invites` |
+| `INVITE_MAX_ATTEMPTS` | `1` | Default attempt limit per invite; per-invite override accepted on `POST /invites` |
 
 ### `frontend/.env`
 
@@ -866,6 +945,28 @@ Edit the prompts at the top of
 fragment definition, and stop-signal handling are all in the
 follow-up system prompt.
 
+### "I want longer-lived invitations or more attempts per invite."
+
+Either set new defaults in `backend/.env`:
+
+```env
+INVITE_EXPIRY_HOURS=72
+INVITE_MAX_ATTEMPTS=3
+```
+
+…or override per-invite when calling `POST /invites` — the request
+body accepts optional `expires_in_hours` and `max_attempts` fields
+(see `backend/app/schemas/invite.py:CreateInviteRequest`). The
+defaults are baked into `core/config.py` and consumed by
+`backend/app/invites/service.py` (`expiry_from_hours`).
+
+### "I want a different question style for invitations."
+
+The three builders live in `backend/app/invites/question_sets.py`.
+Their prompts are intentionally similar to the personal-interview
+prompts in `interviews/agent.py` so the live agent reads them
+without surprises — edit either system prompt to change tone.
+
 ### "I want the candidate's audio recorded for playback in the report."
 
 Currently the report shows the transcript. To capture audio you
@@ -907,4 +1008,7 @@ The most common ones:
 *Updated 2026-04-30. If something here drifts from the code,
 trust the code — the patient turn-taking, focus-integrity, nudge
 cap and stop-intent rules all live in
-`backend/app/interviews/orchestrator.py` and `agent.py`.*
+`backend/app/interviews/orchestrator.py` and `agent.py`; the
+invitation lifecycle (token validation, attempt accounting,
+email-match enforcement, completion hook) lives in
+`backend/app/invites/`.*

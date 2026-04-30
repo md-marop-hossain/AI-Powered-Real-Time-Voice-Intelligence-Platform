@@ -9,6 +9,7 @@ import { useAuthStore } from "@/store/auth";
 const navLinks = [
   { to: "/upload", label: "Practice" },
   { to: "/dashboard", label: "History" },
+  { to: "/invites", label: "Invites" },
   { to: "/account", label: "Account" },
 ];
 

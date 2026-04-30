@@ -33,6 +33,11 @@ export default function VerifyEmailPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const email = params.get("email") ?? "";
+  const rawRedirect = params.get("redirect");
+  const redirectTo =
+    rawRedirect && rawRedirect.startsWith("/") && !rawRedirect.startsWith("//")
+      ? rawRedirect
+      : "/upload";
   const setTokens = useAuthStore((s) => s.setTokens);
   const setUser = useAuthStore((s) => s.setUser);
 
@@ -74,7 +79,7 @@ export default function VerifyEmailPage() {
       const me = await api.get("/auth/me");
       setUser(me.data);
       toast.success("Email verified.");
-      navigate("/upload");
+      navigate(redirectTo);
     } catch (e: any) {
       toast.error(e.response?.data?.detail ?? "We couldn't verify that code.");
     } finally {

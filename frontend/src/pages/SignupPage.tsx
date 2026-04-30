@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -26,8 +26,16 @@ const schema = z.object({
 
 type SignupForm = z.infer<typeof schema>;
 
+function safeRedirectTarget(raw: string | null): string | null {
+  if (!raw) return null;
+  if (!raw.startsWith("/") || raw.startsWith("//")) return null;
+  return raw;
+}
+
 export default function SignupPage() {
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const redirectTo = safeRedirectTarget(params.get("redirect"));
   const [loading, setLoading] = useState(false);
   const setTokens = useAuthStore((s) => s.setTokens);
   const setUser = useAuthStore((s) => s.setUser);
@@ -43,7 +51,12 @@ export default function SignupPage() {
     try {
       await api.post("/auth/register", data);
       toast.success("We sent a 6-digit code to your email.");
-      navigate(`/verify-email?email=${encodeURIComponent(data.email)}`);
+      const redirectQs = redirectTo
+        ? `&redirect=${encodeURIComponent(redirectTo)}`
+        : "";
+      navigate(
+        `/verify-email?email=${encodeURIComponent(data.email)}${redirectQs}`,
+      );
     } catch (e: any) {
       toast.error(e.response?.data?.detail ?? "Something interrupted us. We're looking into it.");
     } finally {
@@ -58,7 +71,7 @@ export default function SignupPage() {
       setTokens(r.data.access_token, r.data.refresh_token);
       const me = await api.get("/auth/me");
       setUser(me.data);
-      navigate("/upload");
+      navigate(redirectTo ?? "/upload");
     } catch (e: any) {
       toast.error(e.response?.data?.detail ?? "Google didn't let us through.");
     }
@@ -79,7 +92,14 @@ export default function SignupPage() {
       footnote={
         <>
           Already have an account?{" "}
-          <Link to="/login" className="editorial-link text-ink">
+          <Link
+            to={
+              redirectTo
+                ? `/login?redirect=${encodeURIComponent(redirectTo)}`
+                : "/login"
+            }
+            className="editorial-link text-ink"
+          >
             Enter the room
           </Link>
         </>

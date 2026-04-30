@@ -16,9 +16,12 @@ log = logging.getLogger(__name__)
 from app.core.dependencies import CurrentUser, DbSession
 from app.core.storage import delete_object, presigned_url
 from app.interviews.agent import generate_question_plan
+from app.invites.service import mark_invitee_completed_for_session
+from app.models.interview_invite import InterviewInvite
 from app.models.report import Report
 from app.models.resume import Resume
 from app.models.session import Session, SessionStatus
+from app.models.user import User
 from app.scoring.aggregator import aggregate_session_scores
 from app.schemas.session import (
     ReportResponse,
@@ -29,6 +32,27 @@ from app.schemas.session import (
 )
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+
+
+async def _user_can_view_session(
+    db, session: Session, user: User
+) -> bool:
+    """Read access: candidate (session owner) OR creator of the linked invite.
+
+    Write paths (end / delete) stay candidate-only and don't go through
+    this helper. Returning a bool lets each route shape its own response.
+    """
+    if session.user_id == user.id:
+        return True
+    if session.invite_id is None:
+        return False
+    res = await db.execute(
+        select(InterviewInvite.creator_id).where(
+            InterviewInvite.id == session.invite_id
+        )
+    )
+    creator_id = res.scalar_one_or_none()
+    return creator_id is not None and creator_id == user.id
 
 
 @router.post("", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
@@ -91,6 +115,7 @@ async def end_session(
     # Aggregate final scores.
     final = aggregate_session_scores(session.turns or [])
     session.final_scores = final
+    await mark_invitee_completed_for_session(db, session)
     await db.commit()
     await db.refresh(session)
     return SessionResponse.model_validate(session)
@@ -130,11 +155,11 @@ async def get_session(
 ) -> SessionDetail:
     res = await db.execute(
         select(Session)
-        .where(Session.id == session_id, Session.user_id == current_user.id)
+        .where(Session.id == session_id)
         .options(selectinload(Session.turns))
     )
     session = res.scalar_one_or_none()
-    if not session:
+    if not session or not await _user_can_view_session(db, session, current_user):
         raise HTTPException(status_code=404, detail="Session not found")
 
     return SessionDetail(
@@ -156,11 +181,11 @@ async def get_report(
 ) -> ReportResponse:
     sres = await db.execute(
         select(Session)
-        .where(Session.id == session_id, Session.user_id == current_user.id)
+        .where(Session.id == session_id)
         .options(selectinload(Session.turns), selectinload(Session.report))
     )
     session = sres.scalar_one_or_none()
-    if not session:
+    if not session or not await _user_can_view_session(db, session, current_user):
         raise HTTPException(status_code=404, detail="Session not found")
 
     if not session.report:
@@ -177,7 +202,10 @@ async def get_report(
         pdf_key: str | None = None
         try:
             pdf_bytes = render_pdf(session, summary)
-            pdf_key = f"reports/{current_user.id}/{session.id}.pdf"
+            # Always key by the session's owner (candidate), not the
+            # requesting user — the creator viewing a candidate's report
+            # would otherwise scatter PDFs across multiple paths.
+            pdf_key = f"reports/{session.user_id}/{session.id}.pdf"
             upload_bytes(pdf_key, pdf_bytes, content_type="application/pdf")
         except Exception as e:
             log.warning(

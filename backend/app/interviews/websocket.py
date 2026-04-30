@@ -129,7 +129,17 @@ async def interview_ws(
                     log.warning("TTS stream exceeded 30s — flushing audio_end")
                 except Exception as e:
                     log.warning("TTS stream failed: %s", e)
-                await websocket.send_json({"type": "ai_audio_end"})
+                # `send_json` is unbounded and will block forever on a
+                # back-pressured socket. Without this wait_for the candidate
+                # gets stuck on "Rehearsal is finishing the question…" —
+                # the client only leaves that state on `ai_audio_end`.
+                try:
+                    await asyncio.wait_for(
+                        websocket.send_json({"type": "ai_audio_end"}),
+                        timeout=5.0,
+                    )
+                except Exception as e:
+                    log.warning("ai_audio_end send failed: %s", e)
 
         # Final transcript handler -> orchestrator step.
         pending: asyncio.Queue[str] = asyncio.Queue()
@@ -207,8 +217,27 @@ async def interview_ws(
                 ended = bool(result.get("ended"))
 
                 if next_text:
+                    # Hard outer cap on the entire speak() call. The inner
+                    # wait_for only bounds the TTS stream — the surrounding
+                    # send_json frames (ai_question / ai_audio_end) are
+                    # unbounded, so a back-pressured socket or a hung TTS
+                    # provider could otherwise leave the candidate stuck on
+                    # "Rehearsal is finishing the question…" forever and
+                    # block the session_ended emit below. Use a tighter
+                    # bound on the closing turn so the candidate doesn't
+                    # wait long for the navigation to fire.
+                    speak_timeout = 35.0 if ended else 60.0
                     try:
-                        await speak(next_text, is_nudge=bool(result.get("is_nudge")))
+                        await asyncio.wait_for(
+                            speak(next_text, is_nudge=bool(result.get("is_nudge"))),
+                            timeout=speak_timeout,
+                        )
+                    except asyncio.TimeoutError:
+                        log.warning(
+                            "speak() exceeded %ss on %s turn — forcing close-out",
+                            speak_timeout,
+                            "closing" if ended else "next",
+                        )
                     except Exception as e:
                         log.warning("speak() raised on turn close-out: %s", e)
 
@@ -224,10 +253,15 @@ async def interview_ws(
                 if ended:
                     # Guaranteed-path emit: the client uses this to navigate
                     # to the completion screen, so it must go out even if the
-                    # closing speak or time_remaining failed above.
+                    # closing speak or time_remaining failed above. Bound it
+                    # too — if the socket itself is stuck we'd rather drop
+                    # the connection than leave the candidate hanging.
                     try:
                         async with send_lock:
-                            await websocket.send_json({"type": "session_ended"})
+                            await asyncio.wait_for(
+                                websocket.send_json({"type": "session_ended"}),
+                                timeout=5.0,
+                            )
                     except Exception as e:
                         log.warning("session_ended send failed: %s", e)
                     return
@@ -287,7 +321,21 @@ async def interview_ws(
         except Exception as e:
             log.exception("WS loop error: %s", e)
         finally:
+            # Cancel the consumer AND wait for it to actually exit before we
+            # close the AsyncSession. Without the await, cancel() only marks
+            # the task — its current `await` (often a db.execute) keeps
+            # holding a connection on `db`, and exiting `async with
+            # AsyncSessionLocal() as db` then trips
+            # IllegalStateChangeError ("close() can't be called here;
+            # _connection_for_bind() is already in progress") because two
+            # coroutines are touching the same session at once.
             consumer.cancel()
+            try:
+                await consumer
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                log.warning("consumer raised on cancel: %s", e)
             await stt.stop()
             await orch.force_end()
             try:
