@@ -39,7 +39,7 @@ export function AuthSplit({ eyebrow, heading, sub, formTitle, children, footnote
             className="flex items-center justify-between gap-4"
           >
             <Link
-              to="/login"
+              to="/"
               className="font-display text-[22px] font-medium text-ink"
               style={{ fontVariationSettings: '"opsz" 36' }}
             >
