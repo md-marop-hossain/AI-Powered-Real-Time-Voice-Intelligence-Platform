@@ -108,6 +108,21 @@ class StartInviteResponse(BaseModel):
     attempts_remaining: int
 
 
+class ReceivedInviteView(BaseModel):
+    """Returned from GET /invites/received — candidate's incoming invites."""
+
+    token: str
+    role: str
+    seniority: str | None
+    focus: str | None
+    industry: str | None
+    duration_minutes: int
+    expires_at: datetime
+    attempts_remaining: int
+    creator_name: str | None = None
+    invitee_status: str  # pending | in_progress | completed | expired
+
+
 class InviteResultRow(BaseModel):
     invitee_id: UUID
     email: str

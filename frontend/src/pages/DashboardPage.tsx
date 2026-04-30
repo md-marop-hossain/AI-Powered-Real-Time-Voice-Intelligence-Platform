@@ -12,6 +12,19 @@ import { LoadingLine } from "@/components/editorial/LoadingLine";
 import { EmptyState } from "@/components/editorial/EmptyState";
 import { ConfirmDialog } from "@/components/editorial/ConfirmDialog";
 
+interface ReceivedInvite {
+  token: string;
+  role: string;
+  seniority: string | null;
+  focus: string | null;
+  industry: string | null;
+  duration_minutes: number;
+  expires_at: string;
+  attempts_remaining: number;
+  creator_name: string | null;
+  invitee_status: string;
+}
+
 interface SessionRow {
   id: string;
   role: string;
@@ -63,6 +76,7 @@ export default function DashboardPage() {
   const navigate = useNavigate();
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [stats, setStats] = useState<StatsResponse | null>(null);
+  const [receivedInvites, setReceivedInvites] = useState<ReceivedInvite[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterStatus>("all");
   const [search, setSearch] = useState("");
@@ -73,6 +87,10 @@ export default function DashboardPage() {
     Promise.allSettled([
       api.get<SessionRow[]>("/sessions").then((r) => setSessions(r.data)),
       api.get<StatsResponse>("/auth/me/stats").then((r) => setStats(r.data)),
+      api
+        .get<ReceivedInvite[]>("/invites/received")
+        .then((r) => setReceivedInvites(r.data))
+        .catch(() => {}), // non-critical — silently skip if unavailable
     ])
       .catch(() => toast.error("Something interrupted us. We're looking into it."))
       .finally(() => setLoading(false));
@@ -116,6 +134,75 @@ export default function DashboardPage() {
             Begin a new session <span aria-hidden="true">→</span>
           </Link>
         </header>
+
+        {/* Pending invitations — shown only when the user has actionable invites */}
+        {receivedInvites.filter(
+          (inv) =>
+            inv.invitee_status !== "completed" &&
+            inv.attempts_remaining > 0 &&
+            new Date(inv.expires_at) > new Date(),
+        ).length > 0 && (
+          <section className="mb-16">
+            <div className="mb-8">
+              <Eyebrow className="text-accent">Waiting for you</Eyebrow>
+              <h2 className="mt-3 font-display text-[28px] leading-tight text-ink md:text-[36px]">
+                Pending Invitations
+              </h2>
+            </div>
+            <HairlineDivider strong />
+            <ul>
+              {receivedInvites
+                .filter(
+                  (inv) =>
+                    inv.invitee_status !== "completed" &&
+                    inv.attempts_remaining > 0 &&
+                    new Date(inv.expires_at) > new Date(),
+                )
+                .map((inv) => (
+                  <li key={inv.token}>
+                    <div className="group grid w-full grid-cols-[1fr_auto_auto_auto] items-baseline gap-6 py-6 transition-colors duration-base ease-editorial hover:bg-canvas-elevated">
+                      <div>
+                        <p className="text-body text-ink">{inv.role}</p>
+                        <p className="mt-1 font-mono text-eyebrow text-ink-muted">
+                          {inv.creator_name
+                            ? `From ${inv.creator_name}`
+                            : "Mock interview"}
+                          {" · "}
+                          {inv.duration_minutes} MIN
+                          {inv.seniority
+                            ? ` · ${inv.seniority.toUpperCase()}`
+                            : ""}
+                        </p>
+                      </div>
+                      <span className="font-mono text-eyebrow text-ink-muted tabular-nums">
+                        {inv.attempts_remaining} ATTEMPT
+                        {inv.attempts_remaining !== 1 ? "S" : ""} LEFT
+                      </span>
+                      <span
+                        className={
+                          inv.invitee_status === "in_progress"
+                            ? "font-mono text-eyebrow text-ink"
+                            : "font-mono text-eyebrow text-ink-muted"
+                        }
+                      >
+                        {inv.invitee_status === "in_progress"
+                          ? "IN PROGRESS"
+                          : "PENDING"}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/invite/${inv.token}`)}
+                        className="font-mono text-eyebrow text-accent transition-colors duration-base ease-editorial hover:text-ink"
+                      >
+                        JOIN →
+                      </button>
+                    </div>
+                    <HairlineDivider />
+                  </li>
+                ))}
+            </ul>
+          </section>
+        )}
 
         {/* Stats strip */}
         {stats && stats.sessions_total > 0 && (
