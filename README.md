@@ -2,10 +2,10 @@
 
 A full-stack web app where a candidate uploads their resume and an AI voice agent runs a real-time mock interview.
 
-- **Frontend:** React 18 + Vite + TypeScript + Tailwind + shadcn-style UI
+- **Frontend:** React 18 + Vite + TypeScript + Tailwind + editorial design system (dark mode default)
 - **Backend:** FastAPI (Python 3.11+) with native WebSockets
 - **Data:** Postgres + pgvector, Redis, MinIO (all via docker-compose)
-- **AI:** Pluggable LLM provider (Groq / OpenAI), Deepgram streaming STT, ElevenLabs streaming TTS
+- **AI:** Pluggable LLM provider (Groq / OpenAI), Deepgram streaming STT, ElevenLabs / OpenAI streaming TTS
 - **Auth:** Email/password with **6-digit OTP email verification**, Google OAuth, JWT access + refresh
 - **Email:** Gmail SMTP for OTP and password reset (real, branded HTML emails)
 
@@ -309,12 +309,13 @@ OPENAI_API_KEY=sk-...
 
 1. Sign up at `/signup` — check your inbox for the 6-digit code
 2. Verify at `/verify-email`
-3. Click "New interview" on the dashboard
-4. Upload a PDF/DOCX resume, choose a role and duration
-5. Allow microphone access (Chrome/Edge recommended)
-6. The AI asks the first question through your speakers — answer naturally; live transcription appears on the right
+3. Click "Begin a new session" on the dashboard
+4. Upload a PDF/DOCX resume, confirm the parsed details, choose a role and duration
+5. Complete the 3-step preflight (mic permission, server ping, voice clarity test)
+6. The AI asks questions through your speakers via a 3D animated avatar — answer naturally; live transcription appears in real time
 7. Hit "End session" or let the timer run out
 8. Open the report — overall score, per-dimension chart, per-question breakdown with a downloadable PDF
+9. Use the theme toggle (top-right) to switch between dark and light mode (dark is the default)
 
 ---
 
@@ -346,23 +347,33 @@ Latency target: ≤ 1.5 s p95 from end of user speech to start of AI speech.
 mock-interview-ai/
 ├── frontend/             # React + Vite + TS
 │   └── src/
-│       ├── pages/        # Login, Signup, VerifyEmail, Upload, InterviewRoom, Report, ...
-│       ├── components/   # editorial design system + interview/report widgets
-│       ├── hooks/        # useMicStream, useAudioPlayer
-│       ├── lib/          # api (axios + refresh interceptor), motion, utils
-│       └── store/        # Zustand auth store
+│       ├── pages/        # Landing, Login, Signup, VerifyEmail, ForgotPassword,
+│       │                 # ResetPassword, Dashboard, Upload, InterviewRoom,
+│       │                 # InterviewComplete, Report, Account, NotFound
+│       ├── components/
+│       │   ├── editorial/  # design-system primitives: buttons, inputs,
+│       │   │               # ConfirmDialog, ThemeToggle, Eyebrow, …
+│       │   ├── interview/  # AIAvatar (Three.js), QuestionCard, Waveform,
+│       │   │               # LiveTranscript, ConversationLog, Preflight, …
+│       │   ├── report/     # ScoreBars, ScoreCover, PerQuestionArticle, …
+│       │   └── upload/     # UploadProgress, ParsingReveal, ResumeReview
+│       ├── hooks/        # useMicStream, useAudioPlayer, useInterviewState
+│       ├── lib/          # api (axios + refresh interceptor), motion, streaming, utils
+│       ├── styles/       # tokens.css (CSS custom properties for theming)
+│       └── store/        # Zustand: auth.ts, theme.ts (dark mode default + persist)
 ├── backend/
 │   ├── app/
 │   │   ├── core/         # config, security (bcrypt+JWT), db, llm_provider, storage, email
 │   │   ├── auth/         # routes (register, verify-email, resend-otp, login, google, refresh, reset)
 │   │   ├── resumes/      # upload, parsing (pypdf/python-docx), embeddings
 │   │   ├── interviews/   # orchestrator, agent, STT/TTS clients, WebSocket
-│   │   ├── scoring/      # rubric aggregation
+│   │   ├── scoring/      # rubric aggregation (4 dimensions per turn)
 │   │   ├── reports/      # WeasyPrint PDF generation
-│   │   ├── models/       # SQLAlchemy: User, EmailVerificationToken, PasswordResetToken, ...
+│   │   ├── models/       # SQLAlchemy: User, Session, Turn, Resume, Report,
+│   │   │                 # EmailVerificationToken, PasswordResetToken
 │   │   ├── schemas/      # Pydantic
-│   │   └── workers/      # Celery tasks
-│   ├── alembic/          # DB migrations
+│   │   └── workers/      # Celery tasks (resume parsing offload)
+│   ├── alembic/          # DB migrations (0001–0004)
 │   └── pyproject.toml
 └── docker-compose.yml
 ```
@@ -380,9 +391,12 @@ mock-interview-ai/
 | POST | `/api/v1/auth/forgot-password` | Email a reset link |
 | POST | `/api/v1/auth/reset-password` | Reset using token |
 | GET  | `/api/v1/auth/me` | Current user |
+| GET  | `/api/v1/auth/me/stats` | Dashboard stats (sessions, avg score, practice time) |
 | POST | `/api/v1/resumes` | Upload + parse resume |
+| GET  | `/api/v1/sessions` | List sessions |
 | POST | `/api/v1/sessions` | Start interview session |
 | POST | `/api/v1/sessions/{id}/end` | End session, finalize scores |
+| DELETE | `/api/v1/sessions/{id}` | Delete session + report PDF |
 | GET  | `/api/v1/sessions/{id}/report` | Final scored report (lazy PDF gen) |
 | WS   | `/ws/interview/{id}?token=JWT` | Bidirectional audio + control |
 
@@ -496,4 +510,5 @@ You're on a stale build that still uses `passlib`. The current code uses `bcrypt
 - TTS audio is sent as a single MP3 stream per question and decoded client-side (uses `decodeAudioData`); for chunked playback you'd switch to MediaSource Extensions or PCM streaming.
 - Mic capture uses the deprecated `ScriptProcessorNode` for compatibility — production should prefer `AudioWorklet`.
 - `WeasyPrint` requires GTK on Windows; the report falls back to inline HTML if WeasyPrint can't render. PDFs render fine in WSL or Linux containers.
+- Candidate audio is not recorded for report playback — the `TranscriptPlayer` component exists but the upload path is not wired up.
 - Production hosting (TLS, reverse proxy, observability) is intentionally out of scope.
