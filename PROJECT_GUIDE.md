@@ -126,34 +126,63 @@ frontend/src/
 ├── main.tsx              ReactDOM root, router
 ├── App.tsx               Route table; protected routes
 ├── pages/
+│   ├── LandingPage         (marketing/hero entry, links to login/signup)
 │   ├── SignupPage          + VerifyEmailPage   (OTP flow)
-│   ├── LoginPage           + Forgot / Reset password
+│   ├── LoginPage           + ForgotPasswordPage / ResetPasswordPage
 │   ├── DashboardPage       (sessions list, "new interview")
 │   ├── UploadPage          (resume upload + role/duration)
 │   ├── InterviewRoom       (the live voice loop UI)
+│   ├── InterviewCompletePage (post-session interstitial → report)
 │   ├── ReportPage          (final scored report)
-│   └── AccountPage         (profile + password change)
+│   ├── AccountPage         (profile + password change)
+│   └── NotFoundPage        (404)
 ├── components/
-│   ├── editorial/          Design-system primitives (buttons,
-│   │                       Eyebrow, NumberedMarker, dividers)
-│   ├── interview/          CountdownTimer, Waveform, ConversationLog,
-│   │                       LiveTranscript, AISpeakingIndicator,
-│   │                       SessionPreflightCheck, KeyboardShortcuts,
-│   │                       ResumeFootnote, ChipSelect
-│   └── report/             PerQuestionArticle, TranscriptPlayer
+│   ├── editorial/          Design-system primitives — AuthSplit,
+│   │                       ChipSelect, ConfirmDialog, EditorialButton,
+│   │                       EditorialHeader, EditorialInput, EmptyState,
+│   │                       Eyebrow, HairlineDivider, LoadingLine,
+│   │                       NumberedMarker, PullQuote, ThemeToggle
+│   ├── interview/          AIAvatar (Three.js 3D orb, TTS-amplitude
+│   │                       vertex displacement), AISpeakingIndicator,
+│   │                       ConversationLog, CountdownTimer,
+│   │                       InterviewRules, KeyboardShortcuts,
+│   │                       LiveTranscript, QuestionCard (word-stream
+│   │                       reveal), ResumeFootnote,
+│   │                       SessionPreflightCheck, Transcript, Waveform
+│   ├── report/             PerQuestionArticle, PracticeAgainButton,
+│   │                       ScoreBars, ScoreCover, TranscriptPlayer
+│   ├── upload/             ParsingReveal, ResumeReview, UploadProgress
+│   └── ProtectedRoute.tsx  Auth guard wrapper
 ├── hooks/
 │   ├── useMicStream.ts     Wraps getUserMedia → 16 kHz PCM frames
-│   └── useAudioPlayer.ts   Decodes streamed MP3 → WebAudio playback
+│   ├── useAudioPlayer.ts   Decodes streamed MP3 → WebAudio playback
+│   └── useInterviewState.ts Drives avatar state + interview UI flow
 ├── lib/
 │   ├── api.ts              axios instance + refresh interceptor
 │   ├── motion.ts           framer-motion easing + duration tokens
+│   ├── streaming.ts        WebSocket message handling helpers
 │   └── utils.ts            cn() helper
-└── store/auth.ts           Zustand auth store (token, user)
+├── styles/                 tokens.css (--ink, --accent, --canvas-*)
+└── store/
+    ├── auth.ts             Zustand auth store (token, user)
+    └── theme.ts            Zustand theme store (light/dark, persisted,
+                            syncs `data-theme` attr, follows system pref)
 ```
 
 The design system is intentionally editorial — Fraunces display
 font, JetBrains Mono for timers/eyebrows, vermillion accent — see
-the existing components for the tone.
+the existing components for the tone. A **light/dark theme toggle**
+(top-right of the editorial header) flips the `data-theme` attribute
+on `<html>`; all colors come from CSS custom properties in
+`styles/tokens.css`, so components do not need theme-aware code.
+The `AIAvatar` reads its colors from those tokens at mount and on
+theme change without remounting the Three.js scene.
+
+Notable frontend libraries: **Three.js** (3D avatar),
+**Framer Motion** (page + component transitions),
+**Wavesurfer.js** (audio visualization), **React Hook Form + Zod**
+(forms), **TanStack React Query** (server state), **Sonner** (toasts),
+**@react-oauth/google** (Google sign-in button).
 
 ---
 
@@ -409,6 +438,15 @@ your interviewer persona — flip `TTS_PROVIDER` and try a session.
 - 1-minute warning banner; 30-second vermillion line; 5-minute
   toast
 - Keyboard shortcuts: Esc (end), Arrow-Right (skip), `?` (help)
+- **3D AI avatar** (`AIAvatar`) — Three.js orb whose vertices
+  displace in sync with TTS audio amplitude; theme-aware colors
+  from CSS tokens; no remount on theme switch
+- **Word-stream question reveal** (`QuestionCard`) — staggered
+  fade-in of each word as the AI speaks, with metadata footer
+  ("asked by Rehearsal · Xs")
+- **ConfirmDialog** — editorial modal used for destructive
+  actions (end session, etc.); Esc closes, click-outside closes,
+  body scroll locked, autofocus on cancel
 
 ### Scoring and report
 
@@ -425,10 +463,22 @@ your interviewer persona — flip `TTS_PROVIDER` and try a session.
   installed)
 - `focus_violations` count surfaced on the report summary
 
+### UX polish
+
+- **Light / dark theme** with persisted preference (Zustand +
+  localStorage), system-preference fallback, instant CSS-token
+  switch via `data-theme` attribute — no flicker, no remounts
+- **Animated page transitions** (Framer Motion + AnimatePresence)
+  with the `easeEditorial` curve and shared duration tokens
+- **Resume upload reveal** — `UploadProgress` → `ParsingReveal`
+  → `ResumeReview` choreography lets the candidate confirm the
+  parsed structure before continuing
+
 ### Operational
 
 - Docker Compose for Postgres + pgvector, Redis, MinIO, MailHog
-- Alembic migrations (`0001`–`0004`)
+- Alembic migrations (`0001`–`0004`: initial schema, email
+  verification tokens, session metadata, focus violations)
 - Structured logging
 - Pydantic settings with `.env` loading
 - Frontend type-checked with `tsc --noEmit`
@@ -790,6 +840,23 @@ provider, mirror `GroqProvider` / `OpenAIProvider` in
 Remove `VITE_GOOGLE_CLIENT_ID` from `frontend/.env` and the
 button hides. The backend route is also gated on the env var.
 
+### "I want to change the default theme."
+
+Theme is managed by `frontend/src/store/theme.ts` (Zustand with
+persist middleware). The store reads `prefers-color-scheme` on
+first load and writes the chosen mode to `data-theme` on
+`<html>`. To force a default, change the initial value in the
+store. To restyle, edit the CSS custom properties in
+`frontend/src/styles/tokens.css` — every component reads from
+those tokens, so nothing else needs to change.
+
+### "I want a different 3D avatar look."
+
+Edit `frontend/src/components/interview/AIAvatar.tsx`. The orb's
+geometry, displacement amount, and color tokens live there. It
+reads `--ink` / `--accent` / `--canvas-elevated` from CSS so
+swapping tokens recolors the avatar automatically.
+
 ### "I want a different question style."
 
 Edit the prompts at the top of
@@ -837,7 +904,7 @@ The most common ones:
 
 ---
 
-*Updated 2026-04-28. If something here drifts from the code,
+*Updated 2026-04-30. If something here drifts from the code,
 trust the code — the patient turn-taking, focus-integrity, nudge
 cap and stop-intent rules all live in
 `backend/app/interviews/orchestrator.py` and `agent.py`.*
