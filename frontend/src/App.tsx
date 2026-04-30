@@ -1,3 +1,4 @@
+import { useLayoutEffect } from "react";
 import { Route, Routes, useLocation } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 
@@ -32,15 +33,28 @@ export default function App() {
     ? { duration: 0 }
     : { duration: 0.28, ease: easeEditorial };
 
+  // Reset scroll on every route change. Without this, navigating from a
+  // long page (e.g. InterviewRoom with a tall conversation log) to a
+  // short one (InterviewCompletePage) leaves window.scrollY parked at the
+  // old page's bottom — the candidate sees a blank screen and has to
+  // scroll up to find the new page. useLayoutEffect runs before paint, so
+  // the user never sees the wrong scroll position.
+  useLayoutEffect(() => {
+    window.scrollTo(0, 0);
+  }, [location.pathname]);
+
   return (
     // `mode="wait"` was causing pages to mount stuck at opacity 0 when
     // navigate() fired during another transition (e.g. from inside a
-    // setTimeout in ws.onclose). Default sync mode lets the new page
-    // appear immediately while the old one fades — and crucially never
-    // strands the new page in its initial state. We also guarantee the
-    // page always animates *to* visible via `whileInView` style: even if
-    // framer skips the enter animation, the element is opacity 1.
-    <AnimatePresence initial={false}>
+    // setTimeout in ws.onclose). `mode="popLayout"` is the right balance:
+    // exiting pages are popped out of layout (position: absolute) so they
+    // don't contribute to document height — without it, the entering
+    // page renders BELOW the still-mounted exiting page in document flow,
+    // and the candidate ends up scrolled past the new content. With
+    // popLayout the new page becomes the only thing affecting layout the
+    // moment it mounts, so the scroll-reset above lands the user at the
+    // top of the new page — not somewhere inside the old, fading one.
+    <AnimatePresence initial={false} mode="popLayout">
       <motion.div
         key={location.pathname}
         initial={{ opacity: 0, y: 8 }}

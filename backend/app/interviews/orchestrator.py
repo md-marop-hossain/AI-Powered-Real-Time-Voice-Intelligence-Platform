@@ -98,11 +98,24 @@ class SessionOrchestrator:
         plan: list[dict],
         resume_summary: str,
         db: AsyncSession,
+        mode: str = "resume_based",
     ):
         self.session = session
         self.plan = plan
         self.resume_summary = resume_summary
         self.db = db
+        # Mode controls which behaviours are allowed mid-interview:
+        #   - "predefined": questions come verbatim from the creator. Ad-hoc
+        #     follow-ups are forbidden. Nudges + move-on are the only LLM
+        #     decisions honoured; ask_followup is rewritten to next_question.
+        #   - "ai_generated" / "jd_based": questions were generated from the
+        #     interview shape (and JD if applicable) without a resume. The
+        #     follow-up LLM may still probe within the same topic.
+        #   - "resume_based": full resume context end-to-end (default).
+        # Anything else is treated as "resume_based" for back-compat.
+        self.mode = mode if mode in {
+            "predefined", "ai_generated", "jd_based", "resume_based"
+        } else "resume_based"
         self.history: list[dict[str, Any]] = []
         self.plan_idx: int = 0
         self.current_turn: Turn | None = None
@@ -253,6 +266,23 @@ class SessionOrchestrator:
             if move == "ask_followup" and self._followups_on_current_question >= FOLLOWUP_CAP:
                 move = "next_question"
                 next_text = ""
+
+            # PREDEFINED MODE: the creator's question list is the ENTIRE
+            # interview. Any ad-hoc follow-up the LLM tries to inject is
+            # rewritten to the next planned question (or end_section if we
+            # were already at the last one). This is what enforces "the AI
+            # must strictly follow and ask based on these questions."
+            # Nudges still pass through — they're conversational glue, not
+            # new questions, so they don't break strict adherence.
+            if self.mode == "predefined" and move == "ask_followup":
+                if self.plan_idx >= len(self.plan) - 1:
+                    move = "end_section"
+                    next_text = next_text if not next_text.strip().endswith("?") else ""
+                    if not next_text:
+                        next_text = "Thanks — that wraps up the questions for today."
+                else:
+                    move = "next_question"
+                    next_text = ""
 
             if move == "nudge":
                 # Soft continuation: do NOT create a new Turn, do NOT persist

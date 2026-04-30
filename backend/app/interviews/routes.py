@@ -87,7 +87,10 @@ async def start_session(
         industry=body.industry,
         duration_minutes=body.duration_minutes,
         status=SessionStatus.pending,
-        questions_plan={"questions": plan},
+        # Tag the mode so the orchestrator can branch on it at runtime —
+        # "resume_based" is the default flow that uses the candidate's
+        # parsed resume for both plan generation AND follow-ups.
+        questions_plan={"questions": plan, "mode": "resume_based"},
     )
     db.add(session)
     await db.commit()

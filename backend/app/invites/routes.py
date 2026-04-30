@@ -349,6 +349,13 @@ async def start_invite(
     if not plan:
         raise HTTPException(status_code=500, detail="Invite has no question plan")
 
+    # Persist the mode alongside the questions so the live orchestrator can
+    # apply mode-specific rules at runtime (e.g. predefined disallows ad-hoc
+    # follow-ups; ai_generated / jd_based skip resume context to stay
+    # tonally consistent with how their plans were generated).
+    qs_type = invite.question_set.type
+    mode_str = qs_type.value if hasattr(qs_type, "value") else str(qs_type)
+
     session = Session(
         user_id=current_user.id,
         resume_id=resume_id,
@@ -359,7 +366,7 @@ async def start_invite(
         industry=invite.industry,
         duration_minutes=invite.duration_minutes,
         status=SessionStatus.pending,
-        questions_plan={"questions": plan},
+        questions_plan={"questions": plan, "mode": mode_str},
     )
     db.add(session)
 

@@ -19,10 +19,16 @@ app/interviews/routes.py
 app/interviews/stt.py
 app/interviews/tts.py
 app/interviews/websocket.py
+app/invites/__init__.py
+app/invites/question_sets.py
+app/invites/routes.py
+app/invites/service.py
 app/models/__init__.py
 app/models/email_verification_token.py
+app/models/interview_invite.py
 app/models/interview_template.py
 app/models/password_reset_token.py
+app/models/question_set.py
 app/models/report.py
 app/models/resume.py
 app/models/session.py
@@ -35,6 +41,7 @@ app/resumes/parser.py
 app/resumes/routes.py
 app/schemas/__init__.py
 app/schemas/auth.py
+app/schemas/invite.py
 app/schemas/resume.py
 app/schemas/session.py
 app/scoring/__init__.py
