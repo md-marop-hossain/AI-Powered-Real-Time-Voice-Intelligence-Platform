@@ -487,24 +487,22 @@ function Marquee() {
     "FOUR-DIMENSION SCORING",
     "PDF REPORT IN ONE CLICK",
   ];
+
+  const track = [...items, ...items];
+
   return (
     <section
       aria-hidden="true"
       className="border-y border-rule bg-canvas-elevated overflow-hidden"
     >
-      <motion.div
-        className="flex gap-12 whitespace-nowrap py-4 font-mono text-eyebrow text-ink-muted"
-        initial={{ x: 0 }}
-        animate={{ x: "-50%" }}
-        transition={{ repeat: Infinity, repeatType: "loop", duration: 38, ease: "linear" }}
-      >
-        {[...items, ...items, ...items, ...items].map((s, i) => (
-          <span key={i} className="flex items-center gap-12">
-            {s}
-            <span className="text-rule-strong">·</span>
+      <div className="marquee-track flex whitespace-nowrap py-4 font-mono text-eyebrow text-ink-muted">
+        {track.map((s, i) => (
+          <span key={i} className="flex items-center">
+            <span className="px-8">{s}</span>
+            <span className="text-rule-strong select-none">·</span>
           </span>
         ))}
-      </motion.div>
+      </div>
     </section>
   );
 }
