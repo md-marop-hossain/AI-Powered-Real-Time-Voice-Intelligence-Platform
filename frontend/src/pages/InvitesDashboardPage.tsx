@@ -35,6 +35,7 @@ function lifecycleLabel(inv: InviteSummary): string {
 export default function InvitesDashboardPage() {
   const navigate = useNavigate();
   const [invites, setInvites] = useState<InviteSummary[] | null>(null);
+  const [starting, setStarting] = useState<string | null>(null);
 
   useEffect(() => {
     api
@@ -42,6 +43,21 @@ export default function InvitesDashboardPage() {
       .then((r) => setInvites(r.data))
       .catch(() => toast.error("Couldn't load your invites."));
   }, []);
+
+  const participate = async (inviteId: string) => {
+    setStarting(inviteId);
+    try {
+      const r = await api.post<{ session_id: string }>(
+        `/invites/${inviteId}/participate`,
+        {},
+      );
+      navigate(`/interview/${r.data.session_id}`);
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail;
+      toast.error(typeof detail === "string" ? detail : "Couldn't start the interview.");
+      setStarting(null);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-canvas">
@@ -78,12 +94,13 @@ export default function InvitesDashboardPage() {
                 ).length;
                 return (
                   <li key={inv.id}>
-                    <button
-                      type="button"
-                      onClick={() => navigate(`/invites/${inv.id}/results`)}
-                      className="group grid w-full grid-cols-[1fr_auto_auto_auto] items-baseline gap-6 py-6 text-left transition-colors duration-base ease-editorial hover:bg-canvas-elevated"
-                    >
-                      <div>
+                    <div className="group grid w-full grid-cols-[1fr_auto_auto_auto_auto] items-baseline gap-6 py-6 transition-colors duration-base ease-editorial hover:bg-canvas-elevated">
+                      {/* Left: role + meta — click goes to results */}
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/invites/${inv.id}/results`)}
+                        className="text-left"
+                      >
                         <p className="text-body text-ink">{inv.role}</p>
                         <p className="mt-1 font-mono text-eyebrow text-ink-muted">
                           {inv.invitees.length}{" "}
@@ -92,7 +109,7 @@ export default function InvitesDashboardPage() {
                           {inv.duration_minutes} MIN
                           {inv.seniority ? ` · ${inv.seniority.toUpperCase()}` : ""}
                         </p>
-                      </div>
+                      </button>
                       <span className="font-mono text-eyebrow text-ink-muted tabular-nums">
                         {completed}/{inv.invitees.length} DONE
                       </span>
@@ -105,13 +122,25 @@ export default function InvitesDashboardPage() {
                       >
                         {lifecycle}
                       </span>
-                      <span
-                        aria-hidden="true"
+                      {/* Participate: start the interview as the creator */}
+                      <button
+                        type="button"
+                        onClick={() => participate(inv.id)}
+                        disabled={starting === inv.id}
+                        className="font-mono text-eyebrow text-accent transition-colors duration-base ease-editorial hover:text-ink disabled:opacity-40"
+                      >
+                        {starting === inv.id ? "STARTING…" : "PARTICIPATE →"}
+                      </button>
+                      {/* Results arrow */}
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/invites/${inv.id}/results`)}
+                        aria-label={`View results for ${inv.role}`}
                         className="text-ink transition-transform duration-base ease-editorial group-hover:translate-x-2 group-hover:text-accent"
                       >
                         →
-                      </span>
-                    </button>
+                      </button>
+                    </div>
                     <HairlineDivider />
                   </li>
                 );

@@ -46,6 +46,7 @@ from app.schemas.invite import (
     InviteResultRow,
     InviteSummary,
     PublicInviteView,
+    ReceivedInviteView,
     StartInviteResponse,
 )
 
@@ -227,6 +228,46 @@ async def list_invites(
     return [_summary(i) for i in res.scalars().all()]
 
 
+@router.get("/received", response_model=list[ReceivedInviteView])
+async def list_received_invites(
+    current_user: CurrentUser, db: DbSession
+) -> list[ReceivedInviteView]:
+    """Candidate view: all invites where the signed-in user's email is an invitee."""
+    user_email = (current_user.email or "").strip().lower()
+    res = await db.execute(
+        select(Invitee)
+        .join(InterviewInvite, Invitee.invite_id == InterviewInvite.id)
+        .where(Invitee.email == user_email)
+        .options(
+            selectinload(Invitee.invite).selectinload(InterviewInvite.creator)
+        )
+        .order_by(InterviewInvite.created_at.desc())
+    )
+    invitees = list(res.scalars().all())
+
+    result: list[ReceivedInviteView] = []
+    for iv in invitees:
+        invite = iv.invite
+        remaining = attempts_remaining(invite)
+        result.append(
+            ReceivedInviteView(
+                token=invite.token,
+                role=invite.role,
+                seniority=invite.seniority,
+                focus=invite.focus,
+                industry=invite.industry,
+                duration_minutes=invite.duration_minutes,
+                expires_at=invite.expires_at,
+                attempts_remaining=remaining,
+                creator_name=invite.creator.full_name if invite.creator else None,
+                invitee_status=(
+                    iv.status.value if hasattr(iv.status, "value") else iv.status
+                ),
+            )
+        )
+    return result
+
+
 @router.get("/{token}", response_model=PublicInviteView)
 async def get_invite_by_token(token: str, db: DbSession) -> PublicInviteView:
     """Public endpoint — used by the candidate's landing page."""
@@ -371,6 +412,82 @@ async def start_invite(
     db.add(session)
 
     invite.attempts_used += 1
+    await db.commit()
+    await db.refresh(session)
+    await db.refresh(invite)
+
+    return StartInviteResponse(
+        session_id=session.id, attempts_remaining=attempts_remaining(invite)
+    )
+
+
+@router.post("/{invite_id}/participate", response_model=StartInviteResponse)
+async def participate_as_creator(
+    invite_id: UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+    body: StartInviteRequest = Body(default_factory=StartInviteRequest),
+) -> StartInviteResponse:
+    """Creator self-test: start the interview yourself.
+
+    Bypasses the invitee email check and does not consume an attempt — the creator
+    can use this to experience the exact interview their candidates will receive.
+    """
+    res = await db.execute(
+        select(InterviewInvite)
+        .where(
+            InterviewInvite.id == invite_id,
+            InterviewInvite.creator_id == current_user.id,
+        )
+        .options(selectinload(InterviewInvite.question_set))
+    )
+    invite = res.scalar_one_or_none()
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invite not found")
+
+    plan = (invite.question_set.content or {}).get("questions", [])
+    if not plan:
+        raise HTTPException(status_code=500, detail="Invite has no question plan")
+
+    resume_id: UUID | None = None
+    if body.resume_id is not None:
+        rres = await db.execute(
+            select(Resume).where(
+                Resume.id == body.resume_id, Resume.user_id == current_user.id
+            )
+        )
+        resume = rres.scalar_one_or_none()
+        if not resume:
+            raise HTTPException(status_code=404, detail="Resume not found")
+        resume_id = resume.id
+    else:
+        rres = await db.execute(
+            select(Resume)
+            .where(Resume.user_id == current_user.id)
+            .order_by(Resume.created_at.desc())
+            .limit(1)
+        )
+        latest = rres.scalar_one_or_none()
+        if latest:
+            resume_id = latest.id
+
+    qs_type = invite.question_set.type
+    mode_str = qs_type.value if hasattr(qs_type, "value") else str(qs_type)
+
+    session = Session(
+        user_id=current_user.id,
+        resume_id=resume_id,
+        invite_id=invite.id,
+        role=invite.role,
+        seniority=invite.seniority,
+        focus=invite.focus,
+        industry=invite.industry,
+        duration_minutes=invite.duration_minutes,
+        status=SessionStatus.pending,
+        questions_plan={"questions": plan, "mode": mode_str},
+    )
+    db.add(session)
+    # Intentionally NOT incrementing invite.attempts_used — creator self-test
     await db.commit()
     await db.refresh(session)
     await db.refresh(invite)
