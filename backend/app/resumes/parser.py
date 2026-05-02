@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import io
 import json
-import logging
+import structlog
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -16,7 +16,7 @@ from pypdf.errors import PdfReadError
 
 from app.core.llm_provider import JSON_RESPONSE, get_llm_provider
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger()
 
 # Validation thresholds
 MIN_WORDS = 30

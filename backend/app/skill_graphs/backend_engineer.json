@@ -1,0 +1,105 @@
+{
+  "role": "backend_engineer",
+  "skills": [
+    {
+      "id": "skill:distributed_systems",
+      "name": "Distributed Systems",
+      "weight": 0.15,
+      "keywords": [
+        "distributed", "consensus", "replication", "cap theorem",
+        "eventual consistency", "raft", "paxos", "partition tolerance",
+        "quorum", "leader election", "split brain", "two-phase commit"
+      ]
+    },
+    {
+      "id": "skill:database_design",
+      "name": "Database Design",
+      "weight": 0.12,
+      "keywords": [
+        "normalization", "index", "query optimization", "sharding", "partitioning",
+        "acid", "transaction", "foreign key", "schema", "denormalization",
+        "b-tree", "composite index", "explain plan", "n+1"
+      ]
+    },
+    {
+      "id": "skill:api_design",
+      "name": "API Design",
+      "weight": 0.10,
+      "keywords": [
+        "rest", "grpc", "graphql", "idempotency", "versioning", "pagination",
+        "rate limiting", "openapi", "swagger", "http status", "endpoint",
+        "contract", "backward compatible"
+      ]
+    },
+    {
+      "id": "skill:caching",
+      "name": "Caching",
+      "weight": 0.08,
+      "keywords": [
+        "redis", "memcached", "cache invalidation", "ttl", "eviction",
+        "cache aside", "write-through", "cdn", "cache stampede",
+        "hot key", "cache hit", "cache miss", "distributed cache"
+      ]
+    },
+    {
+      "id": "skill:async_concurrency",
+      "name": "Async & Concurrency",
+      "weight": 0.10,
+      "keywords": [
+        "async", "await", "coroutine", "thread", "mutex", "race condition",
+        "event loop", "queue", "worker", "deadlock", "semaphore",
+        "lock", "atomic", "thread pool", "executor"
+      ]
+    },
+    {
+      "id": "skill:system_design",
+      "name": "System Design",
+      "weight": 0.15,
+      "keywords": [
+        "load balancer", "microservice", "monolith", "message queue", "kafka",
+        "rabbitmq", "service mesh", "latency", "throughput", "scalability",
+        "horizontal scaling", "vertical scaling", "bottleneck", "sla", "slo"
+      ]
+    },
+    {
+      "id": "skill:testing",
+      "name": "Testing & Quality",
+      "weight": 0.08,
+      "keywords": [
+        "unit test", "integration test", "mock", "coverage", "tdd",
+        "contract test", "e2e", "fixture", "stub", "assertion",
+        "regression", "test pyramid", "flaky test"
+      ]
+    },
+    {
+      "id": "skill:security",
+      "name": "Security",
+      "weight": 0.08,
+      "keywords": [
+        "authentication", "authorization", "jwt", "oauth", "encryption",
+        "sql injection", "xss", "secrets management", "rbac", "tls",
+        "hashing", "salt", "csrf", "cors", "least privilege"
+      ]
+    },
+    {
+      "id": "skill:observability",
+      "name": "Observability",
+      "weight": 0.07,
+      "keywords": [
+        "logging", "metrics", "tracing", "prometheus", "grafana", "alerting",
+        "slo", "sla", "opentelemetry", "structured logs", "dashboard",
+        "error rate", "p99", "percentile", "span"
+      ]
+    },
+    {
+      "id": "skill:data_structures_algorithms",
+      "name": "Data Structures & Algorithms",
+      "weight": 0.07,
+      "keywords": [
+        "complexity", "big-o", "hash map", "tree", "graph", "binary search",
+        "sorting", "dynamic programming", "recursion", "stack", "queue",
+        "linked list", "heap", "time complexity", "space complexity"
+      ]
+    }
+  ]
+}

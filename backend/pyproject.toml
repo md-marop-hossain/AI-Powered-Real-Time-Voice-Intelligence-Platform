@@ -58,6 +58,10 @@ dependencies = [
 
     # HTTP
     "httpx>=0.26.0",
+
+    # Logging & observability
+    "structlog>=24.4.0",
+    "sentry-sdk[fastapi]>=2.14.0",
 ]
 
 [project.optional-dependencies]

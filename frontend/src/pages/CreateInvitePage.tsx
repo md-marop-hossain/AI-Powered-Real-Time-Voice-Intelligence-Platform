@@ -81,6 +81,9 @@ export default function CreateInvitePage() {
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [startsAt, setStartsAt] = useState("");
+  const [csvError, setCsvError] = useState("");
+
   const [submitting, setSubmitting] = useState(false);
   const [created, setCreated] = useState<CreatedInvite[] | null>(null);
 
@@ -160,6 +163,31 @@ export default function CreateInvitePage() {
     return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   };
 
+  const handleCSVImport = (file: File) => {
+    setCsvError("");
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = e.target?.result as string;
+      const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      const start = lines[0]?.toLowerCase().includes("email") ? 1 : 0;
+      const emails: string[] = [];
+      for (const line of lines.slice(start)) {
+        const col = line.split(",")[0].replace(/['"]/g, "").trim();
+        if (col.includes("@")) emails.push(col.toLowerCase());
+      }
+      if (emails.length === 0) {
+        setCsvError("No valid email addresses found in CSV.");
+        return;
+      }
+      setEmailsText((prev) => {
+        const existing = prev.split(/\s+/).filter(Boolean);
+        const merged = Array.from(new Set([...existing, ...emails]));
+        return merged.join("\n");
+      });
+    };
+    reader.readAsText(file);
+  };
+
   const parseEmails = (raw: string): string[] => {
     const seen = new Set<string>();
     return raw
@@ -210,6 +238,7 @@ export default function CreateInvitePage() {
       industry: industry.trim() || null,
       duration_minutes: duration,
       mode,
+      starts_at: startsAt ? new Date(startsAt).toISOString() : null,
     };
     if (mode === "predefined") {
       payload.questions = questions.map((q) => q.trim()).filter(Boolean);
@@ -328,6 +357,31 @@ export default function CreateInvitePage() {
                 className="editorial-input w-full"
                 aria-label="Candidate emails"
               />
+              <div className="mt-3 flex items-start gap-4">
+                <label
+                  htmlFor="csv-upload"
+                  className="editorial-link cursor-pointer font-mono text-eyebrow text-ink-muted hover:text-accent"
+                >
+                  IMPORT FROM CSV
+                  <input
+                    id="csv-upload"
+                    type="file"
+                    accept=".csv,text/csv"
+                    className="sr-only"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleCSVImport(f);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+                <p className="text-small text-ink-muted">
+                  First column is used as the email address.
+                </p>
+              </div>
+              {csvError && (
+                <p className="mt-1 text-small text-red-500">{csvError}</p>
+              )}
               <p className="mt-2 text-small text-ink-muted">
                 Separate multiple addresses with commas, spaces, or new lines. Each
                 candidate gets their own link.
@@ -376,6 +430,21 @@ export default function CreateInvitePage() {
               value={duration}
               onChange={(e) => setDuration(parseInt(e.target.value || "20", 10))}
             />
+            <div>
+              <label className="block font-mono text-eyebrow text-ink-muted mb-2">
+                OPENS AT <span className="font-normal">(optional)</span>
+              </label>
+              <input
+                type="datetime-local"
+                value={startsAt}
+                onChange={(e) => setStartsAt(e.target.value)}
+                className="editorial-input"
+              />
+              <p className="mt-2 text-small text-ink-muted">
+                Leave empty to allow access immediately. Set a future date to
+                schedule a timed assessment window.
+              </p>
+            </div>
           </section>
 
           <HairlineDivider />

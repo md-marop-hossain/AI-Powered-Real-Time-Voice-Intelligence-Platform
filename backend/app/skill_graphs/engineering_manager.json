@@ -1,0 +1,85 @@
+{
+  "role": "engineering_manager",
+  "skills": [
+    {
+      "id": "skill:people_leadership",
+      "name": "People Leadership",
+      "weight": 0.18,
+      "keywords": [
+        "1:1", "feedback", "coaching", "mentoring", "career growth", "performance",
+        "motivation", "hire", "fire", "pip", "recognition", "psychological safety",
+        "team culture", "trust"
+      ]
+    },
+    {
+      "id": "skill:technical_direction",
+      "name": "Technical Direction",
+      "weight": 0.15,
+      "keywords": [
+        "architecture", "technical debt", "system design", "trade-off", "review",
+        "rfc", "adr", "scalability", "reliability", "technical strategy",
+        "migration", "refactor", "standards"
+      ]
+    },
+    {
+      "id": "skill:delivery",
+      "name": "Delivery & Execution",
+      "weight": 0.14,
+      "keywords": [
+        "sprint", "velocity", "milestone", "deadline", "risk", "dependency",
+        "unblock", "delivery", "roadmap", "estimation", "scope", "trade-off",
+        "ship", "release"
+      ]
+    },
+    {
+      "id": "skill:cross_team",
+      "name": "Cross-Team Collaboration",
+      "weight": 0.13,
+      "keywords": [
+        "cross-functional", "stakeholder", "alignment", "dependency", "partnership",
+        "product", "design", "data", "influence", "negotiation", "escalation",
+        "communication", "buy-in"
+      ]
+    },
+    {
+      "id": "skill:hiring",
+      "name": "Hiring & Team Building",
+      "weight": 0.12,
+      "keywords": [
+        "hiring", "interview", "bar raiser", "leveling", "headcount", "recruiting",
+        "job description", "onboarding", "diversity", "team composition",
+        "skills gap", "backfill"
+      ]
+    },
+    {
+      "id": "skill:process_improvement",
+      "name": "Process & Operational Excellence",
+      "weight": 0.11,
+      "keywords": [
+        "process", "retrospective", "incident", "postmortem", "on-call",
+        "slo", "error budget", "ci/cd", "automation", "tooling",
+        "efficiency", "toil", "runbook"
+      ]
+    },
+    {
+      "id": "skill:strategic_thinking",
+      "name": "Strategic Thinking",
+      "weight": 0.10,
+      "keywords": [
+        "vision", "strategy", "okr", "goal", "priority", "long-term",
+        "investment", "build vs buy", "platform", "ecosystem", "growth",
+        "organizational design"
+      ]
+    },
+    {
+      "id": "skill:conflict_resolution",
+      "name": "Conflict Resolution",
+      "weight": 0.07,
+      "keywords": [
+        "conflict", "disagreement", "difficult conversation", "mediation",
+        "resolution", "tension", "interpersonal", "feedback", "boundary",
+        "respectful", "empathy"
+      ]
+    }
+  ]
+}

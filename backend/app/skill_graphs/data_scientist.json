@@ -1,0 +1,85 @@
+{
+  "role": "data_scientist",
+  "skills": [
+    {
+      "id": "skill:statistics",
+      "name": "Statistics & Probability",
+      "weight": 0.15,
+      "keywords": [
+        "hypothesis test", "p-value", "confidence interval", "distribution",
+        "bayesian", "frequentist", "variance", "standard deviation",
+        "correlation", "regression", "t-test", "anova", "chi-square"
+      ]
+    },
+    {
+      "id": "skill:machine_learning",
+      "name": "Machine Learning",
+      "weight": 0.18,
+      "keywords": [
+        "supervised", "unsupervised", "classification", "regression", "clustering",
+        "overfitting", "underfitting", "bias variance", "cross validation",
+        "feature engineering", "gradient descent", "loss function", "regularization"
+      ]
+    },
+    {
+      "id": "skill:deep_learning",
+      "name": "Deep Learning",
+      "weight": 0.12,
+      "keywords": [
+        "neural network", "cnn", "rnn", "transformer", "attention", "embedding",
+        "backpropagation", "activation function", "batch normalization",
+        "dropout", "fine-tuning", "pretrained", "gpu"
+      ]
+    },
+    {
+      "id": "skill:data_engineering",
+      "name": "Data Engineering",
+      "weight": 0.12,
+      "keywords": [
+        "etl", "pipeline", "spark", "airflow", "data lake", "data warehouse",
+        "sql", "parquet", "partitioning", "streaming", "kafka", "batch",
+        "schema", "data quality"
+      ]
+    },
+    {
+      "id": "skill:model_evaluation",
+      "name": "Model Evaluation",
+      "weight": 0.12,
+      "keywords": [
+        "accuracy", "precision", "recall", "f1", "auc", "roc", "confusion matrix",
+        "false positive", "false negative", "metrics", "benchmark",
+        "holdout", "stratified", "imbalanced"
+      ]
+    },
+    {
+      "id": "skill:experimentation",
+      "name": "A/B Testing & Experimentation",
+      "weight": 0.11,
+      "keywords": [
+        "a/b test", "experiment", "control group", "treatment", "statistical significance",
+        "sample size", "power", "novelty effect", "uplift", "conversion rate",
+        "multivariate", "causal inference"
+      ]
+    },
+    {
+      "id": "skill:data_analysis",
+      "name": "Exploratory Data Analysis",
+      "weight": 0.10,
+      "keywords": [
+        "eda", "pandas", "numpy", "visualization", "matplotlib", "seaborn",
+        "outlier", "missing data", "imputation", "distribution", "histogram",
+        "scatter plot", "correlation matrix"
+      ]
+    },
+    {
+      "id": "skill:mlops",
+      "name": "MLOps & Deployment",
+      "weight": 0.10,
+      "keywords": [
+        "deployment", "serving", "latency", "monitoring", "drift", "retraining",
+        "docker", "kubernetes", "mlflow", "feature store", "model registry",
+        "shadow mode", "canary"
+      ]
+    }
+  ]
+}

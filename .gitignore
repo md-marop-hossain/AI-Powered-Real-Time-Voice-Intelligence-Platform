@@ -1,6 +1,10 @@
 # Python virtual environment
 /myenv
 
+# Python cache files
+__pycache__/
+*.pyc
+
 # Node.js dependencies
 /frontend/node_modules
 node_modules

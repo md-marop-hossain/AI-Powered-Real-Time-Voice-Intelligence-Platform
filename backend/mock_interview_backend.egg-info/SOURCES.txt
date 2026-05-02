@@ -10,6 +10,7 @@ app/core/database.py
 app/core/dependencies.py
 app/core/email.py
 app/core/llm_provider.py
+app/core/redis_client.py
 app/core/security.py
 app/core/storage.py
 app/interviews/__init__.py
@@ -55,4 +56,9 @@ mock_interview_backend.egg-info/dependency_links.txt
 mock_interview_backend.egg-info/requires.txt
 mock_interview_backend.egg-info/top_level.txt
 tests/test_aggregator.py
+tests/test_invite_service.py
+tests/test_jwt_safety.py
+tests/test_orchestrator_helpers.py
+tests/test_question_set_scrub.py
+tests/test_resume_sanitizer.py
 tests/test_security.py

@@ -6,7 +6,7 @@ These are best-effort; the main HTTP path lazily generates reports if missing.
 from __future__ import annotations
 
 import asyncio
-import logging
+import structlog
 from uuid import UUID
 
 from sqlalchemy import select
@@ -19,7 +19,7 @@ from app.models.session import Session
 from app.reports.generator import build_report_summary, render_pdf
 from app.workers.celery_app import celery_app
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger()
 
 
 async def _generate_report_async(session_id: UUID) -> str | None:

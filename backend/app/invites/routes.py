@@ -10,7 +10,7 @@ Endpoints:
 
 from __future__ import annotations
 
-import logging
+import structlog
 from datetime import datetime
 from uuid import UUID
 
@@ -52,7 +52,7 @@ from app.schemas.invite import (
     StartInviteResponse,
 )
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger()
 
 router = APIRouter(prefix="/invites", tags=["invites"])
 
@@ -67,6 +67,7 @@ def _summary(invite: InterviewInvite) -> InviteSummary:
         industry=invite.industry,
         duration_minutes=invite.duration_minutes,
         expires_at=invite.expires_at,
+        starts_at=invite.starts_at,
         max_attempts=invite.max_attempts,
         attempts_used=invite.attempts_used,
         status=invite.status.value if hasattr(invite.status, "value") else invite.status,
@@ -206,6 +207,7 @@ async def create_invites(
             creator_id=current_user.id,
             token=generate_invite_token(),
             expires_at=expiry_from_hours(body.expires_in_hours),
+            starts_at=body.starts_at,
             max_attempts=body.max_attempts or settings.INVITE_MAX_ATTEMPTS,
             role=body.role,
             seniority=body.seniority,
@@ -297,6 +299,7 @@ async def list_received_invites(
                 industry=invite.industry,
                 duration_minutes=invite.duration_minutes,
                 expires_at=invite.expires_at,
+                starts_at=invite.starts_at,
                 attempts_remaining=remaining,
                 creator_name=invite.creator.full_name if invite.creator else None,
                 invitee_status=(
@@ -331,6 +334,7 @@ async def get_invite_by_token(token: str, db: DbSession) -> PublicInviteView:
         industry=invite.industry,
         duration_minutes=invite.duration_minutes,
         expires_at=invite.expires_at,
+        starts_at=invite.starts_at,
         attempts_remaining=attempts_remaining(invite),
         creator_name=invite.creator.full_name if invite.creator else None,
         invited_emails=[i.email for i in (invite.invitees or [])],

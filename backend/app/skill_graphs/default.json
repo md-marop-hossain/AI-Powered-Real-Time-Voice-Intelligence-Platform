@@ -1,0 +1,50 @@
+{
+  "role": "default",
+  "skills": [
+    {
+      "id": "skill:communication",
+      "name": "Communication",
+      "weight": 0.22,
+      "keywords": [
+        "explain", "clearly", "structured", "articulate", "concise",
+        "example", "analogy", "summary", "organized"
+      ]
+    },
+    {
+      "id": "skill:problem_solving",
+      "name": "Problem Solving",
+      "weight": 0.22,
+      "keywords": [
+        "approach", "solution", "trade-off", "analyze", "debug", "root cause",
+        "hypothesis", "iterate", "alternative", "constraint"
+      ]
+    },
+    {
+      "id": "skill:technical_knowledge",
+      "name": "Technical Knowledge",
+      "weight": 0.20,
+      "keywords": [
+        "implementation", "architecture", "system", "performance", "scalability",
+        "design pattern", "best practice", "tool", "framework", "library"
+      ]
+    },
+    {
+      "id": "skill:critical_thinking",
+      "name": "Critical Thinking",
+      "weight": 0.18,
+      "keywords": [
+        "why", "assumption", "edge case", "consider", "evaluate", "impact",
+        "consequence", "compare", "reasoning", "evidence"
+      ]
+    },
+    {
+      "id": "skill:collaboration",
+      "name": "Collaboration & Ownership",
+      "weight": 0.18,
+      "keywords": [
+        "team", "stakeholder", "ownership", "initiative", "proactive",
+        "cross-functional", "feedback", "outcome", "drive", "lead"
+      ]
+    }
+  ]
+}

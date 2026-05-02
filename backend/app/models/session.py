@@ -60,6 +60,9 @@ class Session(Base):
     focus_violations: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )
+    # Phase 1 AI Intelligence Layer columns
+    difficulty_curve: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    skill_coverage: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

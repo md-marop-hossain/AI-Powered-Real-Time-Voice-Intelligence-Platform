@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import io
-import logging
+import structlog
 from functools import lru_cache
 
 import boto3
@@ -11,7 +11,7 @@ from botocore.client import Config
 
 from app.core.config import settings
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger()
 
 
 @lru_cache

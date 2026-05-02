@@ -34,7 +34,8 @@
     "three": "^0.184.0",
     "wavesurfer.js": "^7.7.10",
     "zod": "^3.22.4",
-    "zustand": "^4.5.2"
+    "zustand": "^4.5.2",
+    "@sentry/react": "^8.0.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.42.1",

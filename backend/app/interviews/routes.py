@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
+import structlog
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -12,13 +12,16 @@ from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger()
 
 from app.auth.routes import limiter
 from app.core.dependencies import CurrentUser, DbSession
 from app.core.storage import delete_object, presigned_url
-from app.interviews.agent import generate_question_plan
+from app.agents.base import LLM_TIMEOUT_SECONDS
+from app.agents.planner import plan_session
+from app.agents.researcher import research_candidate
 from app.invites.service import mark_invitee_completed_for_session
+from app.skill_graphs import load_skill_graph
 from app.models.interview_invite import InterviewInvite
 from app.models.report import Report
 from app.models.resume import Resume
@@ -87,13 +90,32 @@ async def start_session(
             detail="You already have an active interview session.",
         )
 
-    plan = await generate_question_plan(
+    skill_graph = load_skill_graph(body.role)
+
+    research_hints = None
+    try:
+        research_hints = await asyncio.wait_for(
+            research_candidate(
+                user_id=current_user.id,
+                parsed_resume=resume.parsed,
+                role=body.role,
+                seniority=body.seniority,
+                db=db,
+            ),
+            timeout=LLM_TIMEOUT_SECONDS,
+        )
+    except Exception as e:
+        log.warning("ResearchAgent failed: %s — proceeding without hints", e)
+
+    plan = await plan_session(
         role=body.role,
         duration_minutes=body.duration_minutes,
         parsed_resume=resume.parsed,
         seniority=body.seniority,
         focus=body.focus,
         industry=body.industry,
+        skill_graph=skill_graph,
+        research_hints=research_hints,
     )
     if not plan:
         raise HTTPException(status_code=502, detail="Failed to generate interview plan")
@@ -107,10 +129,14 @@ async def start_session(
         industry=body.industry,
         duration_minutes=body.duration_minutes,
         status=SessionStatus.pending,
-        # Tag the mode so the orchestrator can branch on it at runtime —
-        # "resume_based" is the default flow that uses the candidate's
-        # parsed resume for both plan generation AND follow-ups.
-        questions_plan={"questions": plan, "mode": "resume_based"},
+        questions_plan={
+            "questions": plan,
+            "mode": "resume_based",
+            "research_hints": {
+                "weak_areas": research_hints.weak_areas if research_hints else [],
+                "cross_session_note": research_hints.cross_session_note if research_hints else "",
+            },
+        },
     )
     db.add(session)
     await db.commit()

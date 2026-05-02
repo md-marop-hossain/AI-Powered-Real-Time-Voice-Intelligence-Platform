@@ -31,7 +31,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
-import logging
+import structlog
 import wave
 from uuid import UUID
 
@@ -48,7 +48,7 @@ from app.models.report import Report
 from app.models.resume import Resume
 from app.models.session import Session, SessionStatus
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger()
 
 router = APIRouter()
 
@@ -183,10 +183,31 @@ async def _generate_report_background(session_id: UUID) -> None:
                 # (WS path) or skipped (lazy path) — don't re-attempt.
                 return
 
+            from app.agents.base import LLM_TIMEOUT_SECONDS
+            from app.agents.feedback import synthesize_feedback
             from app.core.storage import upload_bytes
             from app.reports.generator import build_report_summary, render_pdf
+            from app.scoring.aggregator import aggregate_session_scores
+            from app.skill_graphs import load_skill_graph
 
-            summary = build_report_summary(session)
+            skill_graph = load_skill_graph(session.role)
+            agg = aggregate_session_scores(list(session.turns or []))
+
+            narrative = None
+            try:
+                narrative = await asyncio.wait_for(
+                    synthesize_feedback(
+                        session=session,
+                        turns=list(session.turns or []),
+                        skill_graph=skill_graph,
+                        dimension_averages=agg["dimension_averages"],
+                    ),
+                    timeout=LLM_TIMEOUT_SECONDS,
+                )
+            except Exception as e:
+                log.warning("FeedbackAgent failed for %s: %s", session_id, e)
+
+            summary = build_report_summary(session, narrative=narrative)
             overall_score = summary.get("overall_score")
             pdf_key: str | None = None
             try:
@@ -486,6 +507,22 @@ async def interview_ws(
                         )
                     except Exception as e:
                         log.warning("speak() raised on turn close-out: %s", e)
+
+                # Fire verifier as a background task after the scored turn is committed.
+                if not is_nudge and turn_being_answered is not None:
+                    scored_scores = result.get("scores")
+                    if scored_scores and turn_being_answered.id is not None:
+                        from app.agents.verifier import verify_scores
+                        asyncio.create_task(
+                            verify_scores(
+                                question=turn_being_answered.question or "",
+                                answer=turn_being_answered.answer or "",
+                                original_scores=scored_scores,
+                                role=session.role,
+                                seniority=session.seniority,
+                                turn_id=turn_being_answered.id,
+                            )
+                        )
 
                 try:
                     async with send_lock:
