@@ -198,6 +198,76 @@ async def send_invite_email(
     await FastMail(conf).send_message(message)
 
 
+async def send_completion_notification_email(
+    to_email: str,
+    creator_name: str,
+    candidate_name: str,
+    candidate_email: str,
+    role: str,
+    overall_score: float | None,
+    results_url: str,
+) -> None:
+    """Notify the creator that one of their invited candidates finished an interview.
+
+    `overall_score` may be None if the session ended before any answer was scored
+    (e.g., focus violations); the email handles both shapes.
+    """
+    score_text = (
+        f"{overall_score:.1f}/10" if isinstance(overall_score, (int, float)) else "—"
+    )
+    preheader = (
+        f"{candidate_name} just finished a {role} mock interview on {BRAND_NAME}. "
+        f"Overall score: {score_text}."
+    )
+    content = f"""
+        <p style="margin:0 0 8px 0;font-size:11px;letter-spacing:0.18em;text-transform:uppercase;color:{INK_MUTED};">
+          Interview completed
+        </p>
+        <h1 style="margin:0 0 24px 0;font-family:Georgia,'Times New Roman',serif;font-size:32px;font-weight:400;line-height:1.2;color:{INK};letter-spacing:-0.01em;">
+          A candidate just finished, {creator_name}.
+        </h1>
+        <p style="margin:0 0 24px 0;font-size:15px;line-height:1.7;color:{INK_SOFT};">
+          <strong style="color:{INK};">{candidate_name}</strong>
+          (<span style="color:{INK_MUTED};">{candidate_email}</span>)
+          completed the <strong style="color:{INK};">{role}</strong> mock interview you sent.
+        </p>
+        <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="margin:0 0 32px 0;">
+          <tr>
+            <td align="center" style="background:{CANVAS};border:1px solid {RULE};border-radius:4px;padding:24px 16px;">
+              <div style="font-size:11px;letter-spacing:0.18em;text-transform:uppercase;color:{INK_MUTED};margin-bottom:6px;">
+                Overall score
+              </div>
+              <div style="font-family:Georgia,'Times New Roman',serif;font-size:36px;font-weight:500;color:{INK};">
+                {score_text}
+              </div>
+            </td>
+          </tr>
+        </table>
+        <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin:0 0 32px 0;">
+          <tr>
+            <td align="center" style="background:{INK};border-radius:2px;">
+              <a href="{results_url}" style="display:inline-block;padding:14px 28px;font-size:12px;font-weight:600;letter-spacing:0.18em;text-transform:uppercase;color:#ffffff;text-decoration:none;">
+                View results &rarr;
+              </a>
+            </td>
+          </tr>
+        </table>
+        <p style="margin:0 0 8px 0;font-size:13px;line-height:1.6;color:{INK_MUTED};">
+          Or open the dashboard directly:
+        </p>
+        <p style="margin:0;font-size:12px;line-height:1.5;color:{INK_SOFT};word-break:break-all;font-family:'SF Mono','Menlo','Consolas',monospace;background:{CANVAS};padding:12px 14px;border:1px solid {RULE};border-radius:3px;">
+          {results_url}
+        </p>
+    """
+    message = MessageSchema(
+        subject=f"{candidate_name} completed your {role} mock interview",
+        recipients=[to_email],
+        body=_layout(preheader, content),
+        subtype=MessageType.html,
+    )
+    await FastMail(conf).send_message(message)
+
+
 async def send_password_reset_email(to_email: str, reset_token: str, full_name: str) -> None:
     reset_link = f"{settings.FRONTEND_URL}/reset-password?token={reset_token}"
     preheader = f"Reset your {BRAND_NAME} password. This link expires in 1 hour."

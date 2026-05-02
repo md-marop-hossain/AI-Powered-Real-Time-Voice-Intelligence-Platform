@@ -5,10 +5,11 @@ import uuid
 from collections.abc import AsyncIterator
 from uuid import UUID
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
+from app.auth.routes import limiter
 from app.core.dependencies import CurrentUser, DbSession
 from app.core.storage import delete_object, upload_bytes
 from app.models.resume import Resume
@@ -215,7 +216,9 @@ async def _process_stream(
 
 
 @router.post("/process")
+@limiter.limit("30/hour")
 async def process_resume_streaming(
+    request: Request,
     current_user: CurrentUser,
     db: DbSession,
     file: UploadFile = File(...),
@@ -258,7 +261,9 @@ async def process_resume_streaming(
 
 
 @router.post("", response_model=ResumeResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("30/hour")
 async def upload_resume(
+    request: Request,
     current_user: CurrentUser,
     db: DbSession,
     file: UploadFile = File(...),

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 
@@ -9,6 +9,19 @@ import { HairlineDivider } from "@/components/editorial/HairlineDivider";
 import { EditorialButton } from "@/components/editorial/EditorialButton";
 import { EditorialInput } from "@/components/editorial/EditorialInput";
 import { ChipSelect } from "@/components/editorial/ChipSelect";
+
+const RESUME_ALLOWED = [
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "text/plain",
+];
+const RESUME_MAX_BYTES = 10 * 1024 * 1024; // matches backend MAX_BYTES
+
+interface UploadedResume {
+  id: string;
+  filename: string;
+  size_bytes: number;
+}
 
 type Seniority = "fresher" | "junior" | "mid" | "senior" | "staff" | "manager";
 type Focus = "mixed" | "technical" | "behavioral" | "system_design";
@@ -59,8 +72,93 @@ export default function CreateInvitePage() {
   const [aiInstructions, setAiInstructions] = useState("");
   const [jobDescription, setJobDescription] = useState("");
 
+  // Résumé (required for ai_generated + jd_based, ignored for predefined).
+  // Persisted as a Resume row via POST /resumes; we only keep the id + display
+  // metadata client-side.
+  const [resume, setResume] = useState<UploadedResume | null>(null);
+  const [resumeError, setResumeError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const [submitting, setSubmitting] = useState(false);
   const [created, setCreated] = useState<CreatedInvite[] | null>(null);
+
+  const resumeRequired = mode === "ai_generated" || mode === "jd_based";
+
+  const uploadResumeFile = async (file: File) => {
+    setResumeError(null);
+    if (!RESUME_ALLOWED.includes(file.type)) {
+      const msg = "Unsupported file type. Use PDF, DOCX, or TXT.";
+      setResumeError(msg);
+      toast.error(msg);
+      return;
+    }
+    if (file.size === 0) {
+      const msg = "That file looks empty.";
+      setResumeError(msg);
+      toast.error(msg);
+      return;
+    }
+    if (file.size > RESUME_MAX_BYTES) {
+      const msg = `File too large (max ${RESUME_MAX_BYTES / (1024 * 1024)} MB).`;
+      setResumeError(msg);
+      toast.error(msg);
+      return;
+    }
+
+    const form = new FormData();
+    form.append("file", file);
+    setUploading(true);
+    try {
+      const r = await api.post<{ id: string; filename: string; size_bytes: number }>(
+        "/resumes",
+        form,
+        { headers: { "Content-Type": "multipart/form-data" } },
+      );
+      setResume({
+        id: r.data.id,
+        filename: r.data.filename,
+        size_bytes: r.data.size_bytes,
+      });
+      toast.success("Résumé uploaded.");
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      const msg =
+        typeof detail === "string"
+          ? detail
+          : "Upload failed. Try a different file.";
+      setResumeError(msg);
+      toast.error(msg);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const onResumeDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setDragActive(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) void uploadResumeFile(file);
+  };
+
+  const onResumePicked = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) void uploadResumeFile(file);
+    // Allow re-picking the same file after a remove
+    e.target.value = "";
+  };
+
+  const removeResume = () => {
+    setResume(null);
+    setResumeError(null);
+  };
+
+  const formatBytes = (n: number): string => {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  };
 
   const parseEmails = (raw: string): string[] => {
     const seen = new Set<string>();
@@ -97,6 +195,12 @@ export default function CreateInvitePage() {
       toast.error("Paste a job description.");
       return;
     }
+    if (resumeRequired && !resume) {
+      const msg = "Upload the candidate's résumé first — required for this mode.";
+      setResumeError(msg);
+      toast.error(msg);
+      return;
+    }
 
     const payload: Record<string, unknown> = {
       emails,
@@ -111,8 +215,10 @@ export default function CreateInvitePage() {
       payload.questions = questions.map((q) => q.trim()).filter(Boolean);
     } else if (mode === "ai_generated") {
       payload.ai_instructions = aiInstructions.trim() || null;
+      payload.resume_id = resume!.id;
     } else if (mode === "jd_based") {
       payload.job_description = jobDescription.trim();
+      payload.resume_id = resume!.id;
     }
 
     setSubmitting(true);
@@ -329,29 +435,57 @@ export default function CreateInvitePage() {
             )}
 
             {mode === "ai_generated" && (
-              <div>
-                <Eyebrow>Extra instructions (optional)</Eyebrow>
-                <textarea
-                  value={aiInstructions}
-                  onChange={(e) => setAiInstructions(e.target.value)}
-                  placeholder="e.g. Lean toward distributed-systems trade-offs and avoid LeetCode-style puzzles."
-                  rows={4}
-                  className="editorial-input mt-3 w-full"
+              <>
+                <ResumeUploadField
+                  resume={resume}
+                  uploading={uploading}
+                  dragActive={dragActive}
+                  error={resumeError}
+                  fileInputRef={fileInputRef}
+                  setDragActive={setDragActive}
+                  onResumeDrop={onResumeDrop}
+                  onResumePicked={onResumePicked}
+                  removeResume={removeResume}
+                  formatBytes={formatBytes}
                 />
-              </div>
+                <div>
+                  <Eyebrow>Extra instructions (optional)</Eyebrow>
+                  <textarea
+                    value={aiInstructions}
+                    onChange={(e) => setAiInstructions(e.target.value)}
+                    placeholder="e.g. Lean toward distributed-systems trade-offs and avoid LeetCode-style puzzles."
+                    rows={4}
+                    className="editorial-input mt-3 w-full"
+                  />
+                </div>
+              </>
             )}
 
             {mode === "jd_based" && (
-              <div>
-                <Eyebrow>Job description</Eyebrow>
-                <textarea
-                  value={jobDescription}
-                  onChange={(e) => setJobDescription(e.target.value)}
-                  placeholder="Paste the full job description here…"
-                  rows={10}
-                  className="editorial-input mt-3 w-full font-mono text-small"
+              <>
+                <ResumeUploadField
+                  resume={resume}
+                  uploading={uploading}
+                  dragActive={dragActive}
+                  error={resumeError}
+                  fileInputRef={fileInputRef}
+                  setDragActive={setDragActive}
+                  onResumeDrop={onResumeDrop}
+                  onResumePicked={onResumePicked}
+                  removeResume={removeResume}
+                  formatBytes={formatBytes}
                 />
-              </div>
+                <div>
+                  <Eyebrow>Job description</Eyebrow>
+                  <textarea
+                    value={jobDescription}
+                    onChange={(e) => setJobDescription(e.target.value)}
+                    placeholder="Paste the full job description here…"
+                    rows={10}
+                    className="editorial-input mt-3 w-full font-mono text-small"
+                  />
+                </div>
+              </>
             )}
           </section>
 
@@ -367,6 +501,133 @@ export default function CreateInvitePage() {
           </div>
         </form>
       </main>
+    </div>
+  );
+}
+
+interface ResumeUploadFieldProps {
+  resume: UploadedResume | null;
+  uploading: boolean;
+  dragActive: boolean;
+  error: string | null;
+  fileInputRef: React.RefObject<HTMLInputElement>;
+  setDragActive: (v: boolean) => void;
+  onResumeDrop: (e: React.DragEvent<HTMLDivElement>) => void;
+  onResumePicked: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  removeResume: () => void;
+  formatBytes: (n: number) => string;
+}
+
+/**
+ * Inline drag-and-drop résumé picker for the invite-creation flow.
+ *
+ * Required for ai_generated and jd_based modes — the file is uploaded to
+ * `/resumes` immediately on drop/select, parsed server-side, and we keep the
+ * returned id to attach to the invite payload on submit.
+ */
+function ResumeUploadField({
+  resume,
+  uploading,
+  dragActive,
+  error,
+  fileInputRef,
+  setDragActive,
+  onResumeDrop,
+  onResumePicked,
+  removeResume,
+  formatBytes,
+}: ResumeUploadFieldProps) {
+  return (
+    <div>
+      <div className="mb-3 flex items-baseline justify-between">
+        <Eyebrow>Candidate's résumé (required)</Eyebrow>
+        <span className="font-mono text-eyebrow text-ink-muted">
+          PDF · DOCX · TXT · ≤ 10 MB
+        </span>
+      </div>
+      <p className="mb-4 text-small text-ink-muted">
+        We feed the parsed résumé to the question-generation LLM so the
+        interview is personalised to this candidate's experience. Without a
+        résumé the questions stay generic — required for this mode.
+      </p>
+
+      {resume ? (
+        <div className="grid grid-cols-[1fr_auto] items-baseline gap-4 border border-rule-strong rounded-[2px] px-5 py-4">
+          <div className="min-w-0">
+            <p className="truncate text-body text-ink">{resume.filename}</p>
+            <p className="mt-1 font-mono text-eyebrow text-ink-muted">
+              UPLOADED · {formatBytes(resume.size_bytes)}
+            </p>
+          </div>
+          <div className="flex items-baseline gap-6">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="font-mono text-eyebrow text-ink-muted underline-offset-4 hover:text-ink hover:underline"
+            >
+              REPLACE
+            </button>
+            <button
+              type="button"
+              onClick={removeResume}
+              className="font-mono text-eyebrow text-accent underline-offset-4 hover:underline"
+            >
+              REMOVE
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragActive(true);
+          }}
+          onDragLeave={() => setDragActive(false)}
+          onDrop={onResumeDrop}
+          onClick={() => fileInputRef.current?.click()}
+          role="button"
+          tabIndex={0}
+          aria-label="Upload résumé — drag a file here or click to pick"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              fileInputRef.current?.click();
+            }
+          }}
+          className={[
+            "cursor-pointer border border-dashed rounded-[2px] px-6 py-10 text-center transition-colors duration-base ease-editorial",
+            dragActive
+              ? "border-accent bg-canvas-elevated"
+              : error
+                ? "border-accent"
+                : "border-rule-strong hover:bg-canvas-elevated",
+          ].join(" ")}
+        >
+          <p className="font-mono text-eyebrow tracking-[0.18em] text-ink-muted">
+            {uploading
+              ? "UPLOADING…"
+              : dragActive
+                ? "DROP TO UPLOAD"
+                : "DRAG A FILE HERE OR CLICK TO PICK"}
+          </p>
+          <p className="mt-3 text-small text-ink-muted">
+            We'll parse it on upload. The candidate will not see this résumé in
+            their own dashboard.
+          </p>
+        </div>
+      )}
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
+        onChange={onResumePicked}
+        className="sr-only"
+      />
+
+      {error && (
+        <p className="mt-3 font-mono text-eyebrow text-accent">{error}</p>
+      )}
     </div>
   );
 }

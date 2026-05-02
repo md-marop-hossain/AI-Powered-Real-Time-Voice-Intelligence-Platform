@@ -2,9 +2,9 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, func
+from sqlalchemy import DateTime, Enum, ForeignKey, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 
@@ -28,6 +28,18 @@ class QuestionSet(Base):
     content: Mapped[dict] = mapped_column(JSONB, nullable=False)
     # Free-form generation metadata (role, seniority, jd snippet, prompt, etc.)
     meta: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Résumé that drove plan generation. Required at the API layer for
+    # ai_generated / jd_based modes; NULL for predefined (no LLM call). On
+    # résumé delete the FK is cleared so the set keeps its questions but the
+    # live follow-up agent loses résumé grounding.
+    resume_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("resumes.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+    resume = relationship("Resume", foreign_keys=[resume_id])

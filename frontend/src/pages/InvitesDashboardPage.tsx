@@ -59,6 +59,15 @@ export default function InvitesDashboardPage() {
     }
   };
 
+  const copyLink = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success("Invite link copied.");
+    } catch {
+      toast.error("Couldn't access the clipboard.");
+    }
+  };
+
   return (
     <div className="min-h-screen bg-canvas">
       <EditorialHeader />
@@ -94,7 +103,7 @@ export default function InvitesDashboardPage() {
                 ).length;
                 return (
                   <li key={inv.id}>
-                    <div className="group grid w-full grid-cols-[1fr_auto_auto_auto_auto] items-baseline gap-6 py-6 transition-colors duration-base ease-editorial hover:bg-canvas-elevated">
+                    <div className="group grid w-full grid-cols-[1fr_auto_auto_auto_auto_auto] items-baseline gap-6 py-6 transition-colors duration-base ease-editorial hover:bg-canvas-elevated">
                       {/* Left: role + meta — click goes to results */}
                       <button
                         type="button"
@@ -122,6 +131,15 @@ export default function InvitesDashboardPage() {
                       >
                         {lifecycle}
                       </span>
+                      {/* Copy invite link to clipboard */}
+                      <button
+                        type="button"
+                        onClick={() => copyLink(inv.invite_url)}
+                        aria-label={`Copy invite link for ${inv.role}`}
+                        className="font-mono text-eyebrow text-ink-muted transition-colors duration-base ease-editorial hover:text-ink"
+                      >
+                        COPY
+                      </button>
                       {/* Participate: start the interview as the creator */}
                       <button
                         type="button"

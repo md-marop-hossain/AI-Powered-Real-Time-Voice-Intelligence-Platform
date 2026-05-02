@@ -1,62 +1,83 @@
 # AI-Powered Voice-Based Mock Interview System
 
-A full-stack web app where a candidate uploads their resume and an AI voice agent runs a real-time mock interview.
+A full-stack web application where a candidate uploads their résumé and an AI voice agent runs a real-time mock interview — asking contextual questions, following up on answers, scoring performance, and generating a detailed PDF report.
 
-- **Frontend:** React 18 + Vite + TypeScript + Tailwind + editorial design system (dark mode default)
+- **Frontend:** React 18 + Vite + TypeScript + Tailwind + custom editorial design system (dark / light mode)
 - **Backend:** FastAPI (Python 3.11+) with native WebSockets
-- **Data:** Postgres + pgvector, Redis, MinIO (all via docker-compose)
-- **AI:** Pluggable LLM provider (Groq / OpenAI), Deepgram streaming STT, ElevenLabs / OpenAI streaming TTS
-- **Auth:** Email/password with **6-digit OTP email verification**, Google OAuth, JWT access + refresh
-- **Email:** Gmail SMTP for OTP, password reset, **and interview invitations** (real, branded HTML emails)
-- **Invitations:** Creators invite candidates by email with tokenized links, attempt + expiry control, three question-source modes (predefined / AI-generated / job-description-based), creator dashboard, per-candidate report visibility
+- **Data:** Postgres + pgvector, Redis, MinIO — all via docker-compose
+- **AI:** Pluggable LLM (Groq / OpenAI), Deepgram streaming STT, ElevenLabs / OpenAI streaming TTS
+- **Auth:** Email/password with 6-digit OTP verification, Google OAuth, JWT access + refresh tokens
+- **Email:** SMTP (Gmail) for OTP, password reset, and interview invitation emails
+- **Invitations:** Creators invite candidates by email with tokenized links, attempt + expiry control, three question-source modes, per-candidate result visibility
+
+---
+
+## Table of Contents
+
+1. [Prerequisites](#prerequisites)
+2. [Quick Start](#quick-start)
+3. [Detailed Setup](#detailed-setup)
+4. [Environment Variables — Full Reference](#environment-variables--full-reference)
+5. [Architecture](#architecture)
+6. [Interview Modes](#interview-modes)
+7. [API Reference](#api-reference)
+8. [Auth Flow](#auth-flow)
+9. [Invitation System](#invitation-system)
+10. [Tests](#tests)
+11. [Troubleshooting](#troubleshooting)
+12. [Known Bugs & Issues](#known-bugs--issues)
+13. [Improvement Roadmap](#improvement-roadmap)
+14. [Strategic Roadmap — Path to Market-Ready SaaS](#strategic-roadmap--path-to-market-ready-saas)
+15. [Security Notes](#security-notes)
+16. [Production Readiness Checklist](#production-readiness-checklist)
 
 ---
 
 ## Prerequisites
 
-Install these once on your machine:
-
 | Tool | Version | Notes |
 |---|---|---|
-| **Docker Desktop** | latest | Must include Docker Compose v2 |
-| **Python** | 3.11 – 3.13 | Get from [python.org](https://www.python.org/downloads/) — **not** the Microsoft Store version, **not** MSYS2's Python |
-| **Node.js** | 20+ | LTS recommended |
-| **Git** | any | |
+| Docker Desktop | latest | Must include Docker Compose v2 |
+| Python | 3.11 – 3.13 | From [python.org](https://www.python.org/downloads/) — not Microsoft Store, not MSYS2 |
+| Node.js | 20+ | LTS recommended |
+| Git | any | |
 
-You'll also need accounts / API keys for:
+External API keys required:
 
-- **Groq** *or* **OpenAI** — for the LLM
-- **Deepgram** — streaming speech-to-text
-- **ElevenLabs** — streaming text-to-speech
-- **Google Cloud** — OAuth 2.0 Client ID for Google Sign-In
-- **Gmail** with 2-Step Verification + an [App Password](https://myaccount.google.com/apppasswords) — for sending OTP / reset emails
+| Service | Used for |
+|---|---|
+| Groq **or** OpenAI | LLM — question generation, turn decisions, scoring |
+| Deepgram | Streaming speech-to-text |
+| ElevenLabs **or** OpenAI TTS | Streaming text-to-speech |
+| Google Cloud OAuth 2.0 | Google Sign-In |
+| Gmail + App Password | OTP, password reset, invite emails |
 
 ---
 
-## Quick start (TL;DR)
+## Quick Start
 
 ```bash
-# clone
+# 1. Clone
 git clone <repo-url> && cd AI-Powered-Voice-Based-Mock-Interview-System
 
-# 1. infra
+# 2. Infrastructure
 docker compose up -d
 
-# 2. backend
+# 3. Backend
 cd backend
 python -m venv myenv
-# Windows PowerShell: .\myenv\Scripts\Activate.ps1
-# macOS/Linux:        source myenv/bin/activate
+# Windows:   .\myenv\Scripts\Activate.ps1
+# macOS/Linux: source myenv/bin/activate
 pip install -e .
 pip install psycopg2-binary
-cp .env.example .env       # then fill in API keys (see below)
+cp .env.example .env        # fill in API keys (see Environment Variables section)
 alembic upgrade head
 uvicorn app.main:app --reload --port 8000
 
-# 3. frontend (new terminal)
+# 4. Frontend (new terminal)
 cd ../frontend
 npm install
-cp .env.example .env       # then fill in VITE_GOOGLE_CLIENT_ID
+cp .env.example .env        # fill in VITE_GOOGLE_CLIENT_ID
 npm run dev
 ```
 
@@ -64,286 +85,163 @@ Open http://localhost:5173 and sign up.
 
 ---
 
-## Detailed setup
+## Detailed Setup
 
-### 1. Clone and inspect
-
-```bash
-git clone <repo-url>
-cd AI-Powered-Voice-Based-Mock-Interview-System
-```
-
-### 2. Start infrastructure (Docker)
-
-The project ships a `docker-compose.yml` that boots **Postgres + pgvector**, **Redis**, **MinIO**, and (optionally) **MailHog** for local email testing.
+### 1. Infrastructure (Docker)
 
 ```bash
 docker compose up -d
+docker compose ps    # verify all containers are healthy
 ```
-
-Verify everything is healthy:
-
-```bash
-docker compose ps
-```
-
-You should see four containers: `mockinterview-postgres`, `mockinterview-redis`, `mockinterview-minio`, `mockinterview-mailhog`. Postgres runs on **port `5433`** (host) → `5432` (container) to avoid clashes with a native PostgreSQL install on Windows.
 
 | Service | Host port | Credentials |
 |---|---|---|
 | Postgres | `localhost:5433` | `postgres` / `postgres`, db `mockinterview` |
 | Redis | `localhost:6379` | none |
-| MinIO console | http://localhost:9001 | `minioadmin` / `minioadmin` |
-| MinIO S3 API | http://localhost:9000 | same |
-| MailHog UI | http://localhost:8025 | none |
+| MinIO S3 API | http://localhost:9000 | `minioadmin` / `minioadmin` |
+| MinIO console | http://localhost:9001 | same |
+| MailHog SMTP | `localhost:1025` | none |
+| MailHog UI | http://localhost:8025 | none (local email catch-all) |
 
-> **First-time slow start?** The pgvector image is ~250 MB. Subsequent runs are instant from the cache.
+> Postgres runs on **port 5433** (not 5432) to avoid conflicts with a native Postgres install.
 
-### 3. Backend
+### 2. Backend
 
-#### 3a. Create a venv with the *real* system Python
+#### Create venv
 
-> **Windows users — important.** If you have **MSYS2** or **Git Bash** in your `PATH`, `python` may resolve to MSYS2's Python which builds packages in non-standard ways and breaks pip. Use the Python launcher to pick the right interpreter explicitly:
-> ```powershell
-> # PowerShell — confirm which Python you'll get
-> py -3.13 -c "import sys; print(sys.executable)"
-> # should print:  C:\Users\YOU\AppData\Local\Programs\Python\Python313\python.exe
->
-> # then create the venv with it
-> py -3.13 -m venv myenv
-> ```
-> If `python -m venv myenv` produces a `bin/` folder instead of `Scripts/`, the venv is MSYS2-based — delete it and use `py -3.13` instead.
+> **Windows users:** If MSYS2/Git Bash is in your PATH, use `py -3.13 -m venv myenv` explicitly — not bare `python`.
 
 ```bash
 cd backend
 python -m venv myenv
-```
-
-Activate:
-
-```powershell
-# Windows PowerShell
-.\myenv\Scripts\Activate.ps1
-```
-
-```bash
-# macOS / Linux
-source myenv/bin/activate
-```
-
-Verify:
-```bash
-python -c "import sys; print(sys.executable)"
-# should point inside myenv/Scripts (Windows) or myenv/bin (Unix)
-```
-
-#### 3b. Install dependencies
-
-```bash
+.\myenv\Scripts\Activate.ps1   # Windows
+# source myenv/bin/activate    # macOS/Linux
 pip install -e .
-pip install psycopg2-binary    # required by Alembic for sync migrations
+pip install psycopg2-binary
 ```
 
-The first install pulls heavy ML packages (sentence-transformers, torch). Expect ~2–5 minutes.
-
-#### 3c. Configure `.env`
+#### Configure `.env`
 
 ```bash
 cp .env.example .env
 ```
 
-Fill in the values. The minimum to get the server running:
+Minimum required values (see [full reference](#environment-variables--full-reference)):
 
 ```env
-# Database — note port 5433 (matches docker-compose.yml)
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5433/mockinterview
 REDIS_URL=redis://localhost:6379/0
-
-# JWT — generate a strong random string
-JWT_SECRET=replace-with-a-long-random-string
-
-# LLM — pick one provider
-LLM_PROVIDER=groq                        # or "openai"
-LLM_MODEL=llama-3.3-70b-versatile        # or "gpt-4o-mini" for openai
+JWT_SECRET=replace-with-a-long-random-string-never-use-default
+LLM_PROVIDER=groq
+LLM_MODEL=llama-3.3-70b-versatile
 GROQ_API_KEY=gsk_...
-OPENAI_API_KEY=sk-...                    # required only if LLM_PROVIDER=openai
-
-# Speech
 DEEPGRAM_API_KEY=...
 ELEVENLABS_API_KEY=...
-ELEVENLABS_VOICE_ID=21m00Tcm4TlvDq8ikWAM
-
-# Google OAuth (same client ID as the frontend)
-GOOGLE_CLIENT_ID=xxxxxxxxxx.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=GOCSPX-...
-
-# MinIO (defaults from docker-compose.yml)
-S3_ENDPOINT_URL=http://localhost:9000
-S3_BUCKET=mockinterview
-S3_ACCESS_KEY=minioadmin
-S3_SECRET_KEY=minioadmin
-S3_REGION=us-east-1
-
-# Gmail SMTP — see "Gmail App Password" section below
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_FROM=you@gmail.com
 SMTP_USER=you@gmail.com
-SMTP_PASSWORD=xxxxxxxxxxxxxxxx           # 16-char Gmail App Password (no spaces)
-
-# Frontend URL (used in email links)
+SMTP_PASSWORD=xxxxxxxxxxxxxxxx
 FRONTEND_URL=http://localhost:5173
 CORS_ORIGINS=http://localhost:5173
-
-# Invitations (defaults shown; override per environment if needed)
-INVITE_EXPIRY_HOURS=24
-INVITE_MAX_ATTEMPTS=1
 ```
 
-#### 3d. Update `alembic.ini`
-
-Confirm the migration URL matches `DATABASE_URL`:
-
-```ini
-sqlalchemy.url = postgresql+psycopg2://postgres:postgres@localhost:5433/mockinterview
-```
-
-#### 3e. Run migrations and start the server
+#### Migrations and server
 
 ```bash
 alembic upgrade head
 uvicorn app.main:app --reload --port 8000
 ```
 
-Sanity check: open http://localhost:8000/health → should return JSON. Swagger UI is at http://localhost:8000/docs.
+Health check: http://localhost:8000/health — Swagger UI: http://localhost:8000/docs
 
-### 4. Frontend
+### 3. Frontend
 
 ```bash
-cd ../frontend
+cd frontend
 npm install
 cp .env.example .env
 ```
 
-Edit `frontend/.env`:
-
+`frontend/.env`:
 ```env
 VITE_API_URL=http://localhost:8000
 VITE_WS_URL=ws://localhost:8000
 VITE_GOOGLE_CLIENT_ID=xxxxxxxxxx.apps.googleusercontent.com
 ```
 
-Run:
-
 ```bash
 npm run dev
 ```
 
-Open http://localhost:5173.
+### 4. Gmail App Password
+
+1. Enable 2-Step Verification on the sending Google account
+2. Go to https://myaccount.google.com/apppasswords
+3. Create an App Password (any label)
+4. Paste the 16-character key as `SMTP_PASSWORD` — no spaces
+
+### 5. Google OAuth Client
+
+1. Google Cloud Console → APIs & Services → Credentials → Create OAuth 2.0 Client ID (Web application)
+2. Authorized JavaScript origins: `http://localhost:5173`
+3. Authorized redirect URIs: `http://localhost:5173`
+4. Copy Client ID → `backend/.env` `GOOGLE_CLIENT_ID` and `frontend/.env` `VITE_GOOGLE_CLIENT_ID`
+5. Copy Client Secret → `backend/.env` `GOOGLE_CLIENT_SECRET`
 
 ---
 
-## Configuration — third-party setup
+## Environment Variables — Full Reference
 
-### Gmail App Password (for sending OTP / reset emails)
+All variables live in `backend/.env` (backend) and `frontend/.env` (frontend). Neither file is committed.
 
-1. Enable [2-Step Verification](https://myaccount.google.com/signinoptions/two-step-verification) on the sending Google account.
-2. Visit https://myaccount.google.com/apppasswords.
-3. Create a new App Password (any name — e.g. "Rehearsal Local").
-4. Copy the 16-character password and paste it as `SMTP_PASSWORD` in `backend/.env` — **no spaces**.
+### Backend
 
-> Never commit the App Password. `backend/.env` is gitignored.
+| Variable | Default | Required | Description |
+|---|---|---|---|
+| `DATABASE_URL` | `postgresql+asyncpg://postgres:postgres@localhost:5433/mockinterview` | Yes | Async Postgres URL |
+| `REDIS_URL` | `redis://localhost:6379/0` | Yes | Redis for sessions / rate limiting |
+| `JWT_SECRET` | `change-me` | **Yes — must override** | Signs all JWTs. A default of `change-me` will cause a startup warning; in production this must be a strong random string |
+| `JWT_ALGORITHM` | `HS256` | No | |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `15` | No | |
+| `REFRESH_TOKEN_EXPIRE_DAYS` | `7` | No | |
+| `PASSWORD_RESET_EXPIRE_MINUTES` | `60` | No | |
+| `LLM_PROVIDER` | `groq` | Yes | `groq` or `openai` |
+| `LLM_MODEL` | `llama-3.3-70b-versatile` | Yes | Model name for chosen provider |
+| `GROQ_API_KEY` | _(empty)_ | If provider=groq | |
+| `OPENAI_API_KEY` | _(empty)_ | If provider=openai | |
+| `DEEPGRAM_API_KEY` | _(empty)_ | Yes | Streaming STT |
+| `TTS_PROVIDER` | `elevenlabs` | No | `elevenlabs` or `openai` |
+| `ELEVENLABS_API_KEY` | _(empty)_ | If TTS=elevenlabs | |
+| `ELEVENLABS_VOICE_ID` | `21m00Tcm4TlvDq8ikWAM` | No | Rachel voice by default |
+| `OPENAI_TTS_MODEL` | `tts-1` | No | |
+| `OPENAI_TTS_VOICE` | `alloy` | No | |
+| `GOOGLE_CLIENT_ID` | _(empty)_ | If using Google OAuth | |
+| `GOOGLE_CLIENT_SECRET` | _(empty)_ | If using Google OAuth | |
+| `S3_ENDPOINT_URL` | `http://localhost:9000` | Yes | MinIO or real S3 |
+| `S3_BUCKET` | `mockinterview` | Yes | |
+| `S3_ACCESS_KEY` | `minioadmin` | Yes | |
+| `S3_SECRET_KEY` | `minioadmin` | Yes | |
+| `S3_REGION` | `us-east-1` | No | |
+| `SMTP_HOST` | `localhost` | Yes | `smtp.gmail.com` for Gmail |
+| `SMTP_PORT` | `1025` | Yes | `587` for Gmail TLS |
+| `SMTP_FROM` | `noreply@mockinterview.local` | Yes | Sender address |
+| `SMTP_USER` | _(empty)_ | Yes | Gmail address |
+| `SMTP_PASSWORD` | _(empty)_ | Yes | Gmail App Password (16 chars) |
+| `FRONTEND_URL` | `http://localhost:5173` | Yes | Used in email links |
+| `CORS_ORIGINS` | `http://localhost:5173` | Yes | Comma-separated allowed origins |
+| `INVITE_EXPIRY_HOURS` | `24` | No | Default invite validity |
+| `INVITE_MAX_ATTEMPTS` | `1` | No | Default max candidate attempts per invite |
 
-### Google OAuth Client
+### Frontend
 
-1. https://console.cloud.google.com → **APIs & Services** → **Credentials**
-2. **Create credentials** → **OAuth 2.0 Client ID** → Web application.
-3. **Authorized JavaScript origins**: `http://localhost:5173`
-4. **Authorized redirect URIs**: `http://localhost:5173`
-5. Copy the **Client ID** into:
-   - `backend/.env` → `GOOGLE_CLIENT_ID`
-   - `frontend/.env` → `VITE_GOOGLE_CLIENT_ID`
-6. Copy the **Client Secret** into `backend/.env` → `GOOGLE_CLIENT_SECRET`.
-
-### LLM provider
-
-Switch providers without code changes — just toggle `LLM_PROVIDER` in `backend/.env`:
-
-```env
-LLM_PROVIDER=groq
-LLM_MODEL=llama-3.3-70b-versatile
-GROQ_API_KEY=gsk_...
-```
-
-or
-
-```env
-LLM_PROVIDER=openai
-LLM_MODEL=gpt-4o-mini
-OPENAI_API_KEY=sk-...
-```
-
----
-
-## Auth flow
-
-### Sign-up (with OTP)
-
-1. User submits name + email + password at `/signup`
-2. Backend creates user with `email_verified=false`, generates a **6-digit OTP**, sends it via Gmail
-3. Frontend redirects to `/verify-email?email=...`
-4. User enters the code
-   - **10-minute** expiry (live countdown shown on screen)
-   - Max **5 attempts** before the token is invalidated
-   - Resend button on a **60-second** cooldown
-5. On valid OTP, backend issues access + refresh JWTs, frontend lands on `/upload`
-
-### Login
-
-- Verified user → tokens, navigate to `/dashboard`
-- Unverified user → backend returns `403 email_not_verified`, frontend resends a fresh OTP and routes to `/verify-email`
-
-### Google OAuth
-
-- Bypasses OTP — Google has already verified the email (`email_verified=true` set automatically)
-- If a manual account already exists with the same email, it's linked (`auth_provider=both`)
-
----
-
-## Use it
-
-1. Sign up at `/signup` — check your inbox for the 6-digit code
-2. Verify at `/verify-email`
-3. Click "Begin a new session" on the dashboard
-4. Upload a PDF/DOCX resume, confirm the parsed details, choose a role and duration
-5. Complete the 3-step preflight (mic permission, server ping, voice clarity test)
-6. The AI asks questions through your speakers via a 3D animated avatar — answer naturally; live transcription appears in real time
-7. Hit "End session" or let the timer run out
-8. Open the report — overall score, per-dimension chart, per-question breakdown with a downloadable PDF
-9. Use the theme toggle (top-right) to switch between dark and light mode (dark is the default)
-
-### Invite someone else to take an interview
-
-The navbar's **Invites** entry routes to the creator dashboard. From there:
-
-1. Click **Create a new invite** (`/invite`).
-2. Add one or more candidate emails (comma / space / newline separated).
-3. Pick the **question source mode**:
-   - **Predefined** — type your own question list.
-   - **AI-generated** — system builds 6–10 questions from role + seniority + focus + optional extra instructions.
-   - **Job description** — paste a JD and the system extracts an interview from it.
-4. Set role / seniority / focus / industry / duration. These still drive follow-up depth and scoring calibration even in predefined mode.
-5. **Send invitations** — the server creates one `InterviewInvite` (with its own token, expiry, and attempt counter) per email, persists the question set, and dispatches branded emails.
-6. Each candidate clicks their link → `/invite/{token}` validates the token and shows interview details. If they're not signed in, they're redirected through `/login?redirect=/invite/{token}` and bounced back after auth. **The signed-in account email must match the address that was invited** — if it doesn't, the page surfaces a "Switch account" prompt and the server returns 403 on `/start`.
-7. Starting the interview creates a `Session` linked to the invite, with the stored `questions_plan` already populated, so the existing WebSocket interview flow runs unchanged.
-8. Back on the creator dashboard (`/invites`) you can see each invite's lifecycle (`ACTIVE / EXPIRED / USED`) and completion count. Drilling in (`/invites/{id}/results`) shows per-candidate scores and links straight to the existing report page — invite creators can view candidate sessions and reports thanks to the read-access carve-out in `_user_can_view_session`.
-
-ENV variables for invitations (overridable in `backend/.env`):
-
-```env
-INVITE_EXPIRY_HOURS=24
-INVITE_MAX_ATTEMPTS=1
-```
+| Variable | Description |
+|---|---|
+| `VITE_API_URL` | Backend HTTP base URL (`http://localhost:8000`) |
+| `VITE_WS_URL` | Backend WebSocket base URL (`ws://localhost:8000`) |
+| `VITE_GOOGLE_CLIENT_ID` | Google OAuth client ID |
 
 ---
 
@@ -352,19 +250,20 @@ INVITE_MAX_ATTEMPTS=1
 ### Real-time voice loop
 
 ```
-Browser mic
-  → MediaRecorder / ScriptProcessor → 16 kHz PCM
+Browser mic (getUserMedia)
+  → 16 kHz PCM chunks (ScriptProcessorNode)
   → WebSocket /ws/interview/{session_id}?token=JWT
-  → FastAPI handler (app/interviews/websocket.py)
+  → FastAPI websocket.py
       → Deepgram streaming STT
-      → on final transcript →
-            SessionOrchestrator.submit_answer()
-              → LLM agent (decide_next_turn — JSON mode)
-              → persist Turn + scores
-              → returns next question text
-      → ElevenLabs streaming TTS
-      → MP3 chunks pushed back over WS
-  → useAudioPlayer plays back
+          → on final transcript
+              → SessionOrchestrator.submit_answer()
+                  → LLM (decide_next_turn, JSON mode)
+                  → Turn persisted + scored
+                  → returns action: next_question | ask_followup | nudge | end_section
+              → next question text
+      → TTS provider (ElevenLabs / OpenAI)
+          → MP3 audio chunks pushed back over WS
+  → useAudioPlayer queues + plays back
 ```
 
 Latency target: ≤ 1.5 s p95 from end of user speech to start of AI speech.
@@ -372,104 +271,220 @@ Latency target: ≤ 1.5 s p95 from end of user speech to start of AI speech.
 ### Repository layout
 
 ```
-mock-interview-ai/
-├── frontend/             # React + Vite + TS
+.
+├── frontend/
 │   └── src/
-│       ├── pages/        # Landing, Login, Signup, VerifyEmail, ForgotPassword,
-│       │                 # ResetPassword, Dashboard, Upload, InterviewRoom,
-│       │                 # InterviewComplete, Report, Account, NotFound,
-│       │                 # CreateInvite, InviteLanding, InvitesDashboard,
-│       │                 # InviteResults
+│       ├── pages/            # 16 pages: auth, dashboard, upload, interview room,
+│       │                     # complete, report, account, invite CRUD + results
 │       ├── components/
-│       │   ├── editorial/  # design-system primitives: buttons, inputs,
-│       │   │               # ConfirmDialog, ThemeToggle, Eyebrow, …
-│       │   ├── interview/  # AIAvatar (Three.js), QuestionCard, Waveform,
-│       │   │               # LiveTranscript, ConversationLog, Preflight, …
-│       │   ├── report/     # ScoreBars, ScoreCover, PerQuestionArticle, …
-│       │   └── upload/     # UploadProgress, ParsingReveal, ResumeReview
-│       ├── hooks/        # useMicStream, useAudioPlayer, useInterviewState
-│       ├── lib/          # api (axios + refresh interceptor), motion, streaming, utils
-│       ├── styles/       # tokens.css (CSS custom properties for theming)
-│       └── store/        # Zustand: auth.ts, theme.ts (dark mode default + persist)
+│       │   ├── editorial/    # design-system: buttons, inputs, dialogs, theme toggle
+│       │   ├── interview/    # AIAvatar (Three.js), QuestionCard, Waveform,
+│       │   │                 # CountdownTimer, Transcript, Preflight, Rules, …
+│       │   ├── report/       # ScoreBars, PerQuestionArticle, PDF cover
+│       │   └── upload/       # UploadProgress, ParsingReveal, ResumeReview
+│       ├── hooks/            # useMicStream, useAudioPlayer, useInterviewState
+│       ├── lib/              # api (axios + refresh interceptor), motion, utils
+│       ├── store/            # Zustand: auth, theme (dark default + persist)
+│       └── styles/           # tokens.css (CSS custom properties)
 ├── backend/
-│   ├── app/
-│   │   ├── core/         # config, security (bcrypt+JWT), db, llm_provider, storage, email
-│   │   ├── auth/         # routes (register, verify-email, resend-otp, login, google, refresh, reset)
-│   │   ├── resumes/      # upload, parsing (pypdf/python-docx), embeddings
-│   │   ├── interviews/   # orchestrator, agent, STT/TTS clients, WebSocket
-│   │   ├── invites/      # invitation system: token validation, question-set
-│   │   │                 # builders (predefined / AI / JD), routes
-│   │   ├── scoring/      # rubric aggregation (4 dimensions per turn)
-│   │   ├── reports/      # WeasyPrint PDF generation
-│   │   ├── models/       # SQLAlchemy: User, Session, Turn, Resume, Report,
-│   │   │                 # EmailVerificationToken, PasswordResetToken,
-│   │   │                 # QuestionSet, InterviewInvite, Invitee
-│   │   ├── schemas/      # Pydantic (auth, resume, session, invite)
-│   │   └── workers/      # Celery tasks (resume parsing offload)
-│   ├── alembic/          # DB migrations (0001–0005; 0005 adds invitations)
-│   └── pyproject.toml
+│   └── app/
+│       ├── core/             # config, security (bcrypt+JWT), db, llm_provider, email
+│       ├── auth/             # register, verify-email, resend-otp, login,
+│       │                     # google, refresh, forgot/reset password, account
+│       ├── resumes/          # upload, parsing (pypdf/python-docx), pgvector embeddings
+│       ├── interviews/       # agent, orchestrator, STT/TTS, WebSocket handler, routes
+│       ├── invites/          # invitation system: question_sets builders, routes, service
+│       ├── scoring/          # rubric aggregation (clarity, depth, structure, relevance)
+│       ├── reports/          # WeasyPrint PDF generation (synchronous — see Known Bugs)
+│       ├── models/           # SQLAlchemy ORM models
+│       ├── schemas/          # Pydantic request/response models
+│       └── workers/          # Celery task definitions (resume parsing offload)
+├── alembic/versions/         # Migrations 0001–0005
 └── docker-compose.yml
 ```
 
-### Key endpoints
+---
 
-| Method | Path | Purpose |
+## Interview Modes
+
+Four modes coexist. The mode is persisted on `session.questions_plan["mode"]` and drives the entire runtime.
+
+| Mode | Question source | Résumé required at create time? | Résumé context in follow-ups | Ad-hoc follow-ups |
+|---|---|---|---|---|
+| `resume_based` | LLM from candidate's own résumé + role/seniority/focus | n/a (candidate's own) | Yes — full | Yes |
+| `predefined` | Creator's verbatim list | ❌ rejected (no LLM call) | ❌ no résumé linked | No — orchestrator overrides `ask_followup` → `next_question` |
+| `ai_generated` | LLM from role/seniority/focus/instructions **+ creator-uploaded candidate résumé** | ✅ **required** | Yes — same résumé that drove the plan | Yes |
+| `jd_based` | LLM from job description **+ creator-uploaded candidate résumé** | ✅ **required** | Yes — same résumé that drove the plan | Yes |
+
+### Invite-mode résumé requirement
+
+For `ai_generated` and `jd_based`, the **creator** uploads the candidate's résumé during invite creation (drag & drop or file picker on `CreateInvitePage`). The flow:
+
+1. Frontend uploads the file to `POST /resumes` (returns `resume_id`).
+2. `POST /invites` is called with `resume_id` in the body. The schema rejects the request if `resume_id` is missing for these two modes.
+3. The route loads the parsed résumé, verifies it belongs to the creator (defence against IDOR), and feeds it to the question-generation LLM.
+4. The chosen `resume_id` is persisted on `QuestionSet.resume_id` so the live follow-up agent can re-use the same résumé context.
+5. When the candidate starts the interview, `Session.resume_id` is set from the invite's linked résumé (priority over the candidate's own `resume_id`), keeping the live agent grounded in the same content the plan was generated from.
+
+If the underlying résumé is later deleted, the question set keeps its already-generated questions but the live follow-up agent loses résumé grounding (graceful degradation via `ON DELETE SET NULL`).
+
+### Isolation invariants
+
+- `session.questions_plan` is always `{"questions": [...], "mode": "<mode>"}`.
+- `websocket.py` builds `resume_summary` whenever `session.resume` is present, **regardless of mode**. Predefined-mode invites never link a résumé so the agent stays generic; all other modes carry the same résumé end-to-end.
+- `SessionOrchestrator(mode=...)` validates against the four-value set; unknown values fall back to `resume_based`.
+- All AI/JD plan output passes through `_scrub_questions()` which strips `[Company Name]`-style placeholder tokens.
+- Nudges (`"Take your time."`, `"Go on."`) are allowed in every mode — they don't count as follow-ups.
+- A predefined plan with N questions ends at slot N even if time remains.
+
+---
+
+## API Reference
+
+### Auth
+
+| Method | Path | Rate limit | Description |
+|---|---|---|---|
+| POST | `/auth/register` | 5/min | Create user, send OTP |
+| POST | `/auth/verify-email` | 10/min | Validate OTP → issue tokens |
+| POST | `/auth/resend-otp` | 3/min | Re-send 6-digit code |
+| POST | `/auth/login` | 10/min | Email + password → tokens |
+| POST | `/auth/google` | 10/min | Google ID token → tokens |
+| POST | `/auth/refresh` | — | Rotate access token |
+| POST | `/auth/forgot-password` | 3/min | Email a reset link |
+| POST | `/auth/reset-password` | 5/min | Consume reset token |
+| GET | `/auth/me` | — | Current user profile |
+| GET | `/auth/me/stats` | — | Dashboard aggregates |
+
+### Resumes
+
+| Method | Path | Description |
 |---|---|---|
-| POST | `/api/v1/auth/register` | Create unverified user, send OTP email |
-| POST | `/api/v1/auth/verify-email` | Validate OTP → issue tokens |
-| POST | `/api/v1/auth/resend-otp` | Send a fresh 6-digit code |
-| POST | `/api/v1/auth/login` | Email + password → tokens (rejects unverified with 403) |
-| POST | `/api/v1/auth/google` | Verify Google ID token server-side → tokens |
-| POST | `/api/v1/auth/refresh` | Refresh access token |
-| POST | `/api/v1/auth/forgot-password` | Email a reset link |
-| POST | `/api/v1/auth/reset-password` | Reset using token |
-| GET  | `/api/v1/auth/me` | Current user |
-| GET  | `/api/v1/auth/me/stats` | Dashboard stats (sessions, avg score, practice time) |
-| POST | `/api/v1/resumes` | Upload + parse resume |
-| GET  | `/api/v1/sessions` | List sessions |
-| POST | `/api/v1/sessions` | Start interview session |
-| POST | `/api/v1/sessions/{id}/end` | End session, finalize scores |
-| DELETE | `/api/v1/sessions/{id}` | Delete session + report PDF |
-| GET  | `/api/v1/sessions/{id}/report` | Final scored report (lazy PDF gen) |
-| POST | `/api/v1/invites` | Create invitations (one per email) + send emails |
-| GET  | `/api/v1/invites` | Creator dashboard list |
-| GET  | `/api/v1/invites/{token}` | Public landing — validate token, show invite info |
-| POST | `/api/v1/invites/{token}/start` | Candidate starts the interview (auth + email-match required) |
-| GET  | `/api/v1/invites/{id}/results` | Creator-only — per-candidate result rows |
-| WS   | `/ws/interview/{id}?token=JWT` | Bidirectional audio + control |
+| POST | `/resumes` | Upload PDF/DOCX/TXT (≤ 10 MB), parse, store embeddings |
+| GET | `/resumes` | List user's resumes |
+| DELETE | `/resumes/{id}` | Delete resume + S3 object |
+
+### Sessions
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/sessions` | Start a `resume_based` interview session |
+| GET | `/sessions` | List all sessions |
+| GET | `/sessions/{id}` | Session detail + status |
+| POST | `/sessions/{id}/end` | Finalize + score session |
+| DELETE | `/sessions/{id}` | Delete session + report PDF |
+| GET | `/sessions/{id}/report` | Scored report (lazy PDF generation — see Known Bugs #3) |
+| WS | `/ws/interview/{id}?token=JWT` | Bidirectional audio + control channel |
+
+### Invitations
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/invites` | Creator | Create invites (one per email) + send emails. **`ai_generated` and `jd_based` modes require `resume_id`** (upload via `POST /resumes` first). |
+| GET | `/invites` | Creator | Creator dashboard list |
+| GET | `/invites/received` | Candidate | Invites where signed-in email is an invitee |
+| GET | `/invites/{token}` | Public | Validate token, show invite info |
+| POST | `/invites/{token}/start` | Candidate (email-match required) | Create session from invite |
+| POST | `/invites/{id}/participate` | Creator only | Creator self-test — bypasses email check, does not consume an attempt |
+| GET | `/invites/{id}/results` | Creator only | Per-candidate result rows |
+
+---
+
+## Auth Flow
+
+### Sign-up
+
+1. Submit name + email + password → backend creates user (`email_verified=false`), sends 6-digit OTP
+2. OTP: 10-minute expiry, max 5 attempts, resend on 60-second cooldown
+3. On valid OTP → issue JWT access (15 min) + refresh (7 days) tokens
+
+### Login
+
+- Verified user → tokens
+- Unverified user → 403 `email_not_verified` → frontend resends OTP, routes to `/verify-email`
+
+### Google OAuth
+
+- Bypasses OTP (Google has already verified the email)
+- Existing manual account with same email → linked (`auth_provider=both`)
+
+### Token lifecycle
+
+- Access token: 15-minute expiry, sent in `Authorization: Bearer` header
+- Refresh token: 7-day expiry, stored in Zustand, used by axios interceptor on 401
+- Password reset: single-use token, bcrypt-hashed in DB, 60-minute expiry
+
+---
+
+## Invitation System
+
+### Creator flow
+
+1. `/invite` → fill emails, role, duration, seniority, focus, industry, question mode
+2. **For `ai_generated` and `jd_based` modes:** drag & drop the candidate's résumé (PDF / DOCX / TXT, ≤ 10 MB) into the upload zone — required before submit. The file is uploaded to `/resumes` immediately and the returned `resume_id` is attached to the invite payload. The résumé is fed to the question-generation LLM so the plan is personalised, and is re-used by the live follow-up agent during the interview.
+3. Submit → one `InterviewInvite` per email, each with its own token, expiry, attempt counter; one `QuestionSet` row per invite request, linked to the uploaded résumé via `QuestionSet.resume_id`.
+4. Branded emails dispatched to all invitees
+5. `/invites` dashboard shows lifecycle (ACTIVE / EXPIRED / USED), completion ratio
+6. `PARTICIPATE →` button lets the creator experience the interview themselves (does not consume an attempt)
+7. Click any row → `/invites/{id}/results` → per-candidate scores + report links
+
+### Candidate flow
+
+1. Click link in email → `/invite/{token}` → see invite details
+2. **Or** log in → dashboard shows "Pending Invitations" section with `JOIN →` button
+3. Sign in with the invited email address (enforced server-side with 403 on mismatch)
+4. Click "Start interview" → session created from stored question plan → WebSocket interview
+
+### Attempt control
+
+- `max_attempts` (default: 1) limits how many times a candidate can start this invite
+- Creator's self-test via `/participate` does **not** decrement `attempts_used`
+- Expiry enforced at both token-validation time and start time
 
 ---
 
 ## Tests
 
-Backend:
 ```bash
-cd backend
-pytest
+# Backend
+cd backend && pytest
+
+# Frontend unit (Vitest)
+cd frontend && npm test
+
+# Frontend E2E (Playwright — needs both servers running)
+cd frontend && npx playwright install && npm run test:e2e
 ```
 
-Frontend:
-```bash
-cd frontend
-npm test
-```
+### Current coverage (as of this writing)
 
-E2E (Playwright — needs both servers running):
-```bash
-cd frontend
-npx playwright install
-npm run test:e2e
-```
+| Area | Status |
+|---|---|
+| Scoring aggregation | 2 tests ✓ |
+| JWT / bcrypt security | 4 tests ✓ |
+| JWT secret startup safety | 9 tests ✓ |
+| Résumé prompt-injection sanitizer | 12 tests ✓ |
+| Invite service (token / expiry / lifecycle) | 11 tests ✓ |
+| Orchestrator helpers (stop-intent, short-answer guard, caps) | 23 tests ✓ |
+| Question-set placeholder scrubber | 8 tests ✓ |
+| Auth routes | ✗ Not tested |
+| Session routes | ✗ Not tested |
+| Invite routes | ✗ Not tested |
+| WebSocket protocol | ✗ Not tested |
+| Resume upload/parsing | ✗ Not tested |
+| Report generation | ✗ Not tested |
+| Frontend components | ✗ Not tested |
+| E2E interview flow | ✗ Not tested |
+
+**Total: 69 tests passing.** Pure-unit coverage is now solid; route / WS integration coverage is still pending — see [Improvement Roadmap](#improvement-roadmap) item 17.
 
 ---
 
 ## Troubleshooting
 
-### `pip install -e .` builds packages from source and fails with SSL errors
+### `pip install -e .` fails with SSL errors
 
-Cause: MSYS2 / Git Bash Python is in `PATH` and being used for build subprocesses. It has broken SSL certs.
-
-Fix: Use the Python launcher to create a venv against the real Windows Python, then strip MSYS2 from PATH for the install session:
+MSYS2 Python is in PATH. Fix:
 
 ```powershell
 $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -notlike '*msys64*' }) -join ';'
@@ -479,74 +494,634 @@ py -3.13 -m venv myenv
 pip install -e .
 ```
 
-### `alembic upgrade head` fails with `password authentication failed for user "postgres"`
+### `alembic upgrade head` — authentication failed for `postgres`
 
-Cause: A native PostgreSQL service is running on `localhost:5432` and intercepting the connection before Docker's port forwarding.
-
-Check:
-```powershell
-netstat -ano | findstr ":5432"
-# look for two PIDs — postgres.exe is the native service, com.docker.backend.exe is Docker
-```
-
-Fix (option A — keep both): docker-compose maps Postgres to `5433` instead of `5432`. Make sure both `backend/.env` (`DATABASE_URL`) and `backend/alembic.ini` (`sqlalchemy.url`) use port `5433`.
-
-Fix (option B — disable native): `Stop-Service -Name "postgresql-x64-16"` (adjust to your installed version).
+A native Postgres is intercepting on port 5432 before Docker. Check `backend/.env` and `alembic.ini` both use port `5433`.
 
 ### `extension "vector" is not available`
 
-You're on a vanilla Postgres image. The compose file uses `ankane/pgvector:latest` which has it pre-installed. If you previously had a stale volume from a non-pgvector image:
+Stale volume from a non-pgvector image:
 
 ```bash
-docker compose down -v   # the -v deletes the volume
+docker compose down -v
 docker compose up -d
 alembic upgrade head
 ```
 
 ### Google login: `Missing required parameter: client_id`
 
-`VITE_GOOGLE_CLIENT_ID` isn't set in `frontend/.env` — or Vite was already running when the file was created. Stop `npm run dev` (Ctrl+C) and start it again so the new env vars are picked up.
-
-Also confirm `http://localhost:5173` is added to the OAuth client's **Authorized JavaScript origins** in Google Cloud Console.
+`VITE_GOOGLE_CLIENT_ID` not set, or Vite was already running when `.env` was created. Stop and restart `npm run dev`.
 
 ### OTP email never arrives
 
-1. Confirm `SMTP_PASSWORD` is a **Gmail App Password** (16 chars, no spaces), not your account password.
-2. Check the backend console — the resend / register handler swallows SMTP errors so the user can retry.
-3. Watch uvicorn logs while triggering: `aiosmtplib.errors.SMTPAuthenticationError` means wrong creds; `SMTPConnectError` means port 587 is blocked on your network.
+1. `SMTP_PASSWORD` must be a Gmail App Password (16 chars, no spaces) — not your account password
+2. Watch uvicorn logs: `SMTPAuthenticationError` = wrong creds; `SMTPConnectError` = port 587 blocked
+3. For local dev use MailHog (http://localhost:8025) — set `SMTP_HOST=localhost`, `SMTP_PORT=1025`
 
 ### `ImportError: cannot import name 'DeepgramClientOptions' from 'deepgram'`
-
-`deepgram-sdk` v7 reorganised exports. `pyproject.toml` pins `deepgram-sdk>=3.2.0,<4.0.0` — if pip resolved a newer version, force a clean install:
 
 ```bash
 pip install "deepgram-sdk>=3.2.0,<4.0.0" --force-reinstall
 ```
 
-### Backend 500 on `/auth/register`: `password cannot be longer than 72 bytes`
+### WeasyPrint PDF fails on Windows
 
-You're on a stale build that still uses `passlib`. The current code uses `bcrypt` directly in `backend/app/core/security.py`. Pull latest, restart uvicorn.
+WeasyPrint requires GTK. On Windows without GTK, the report falls back to inline HTML. For full PDF support use WSL or a Linux container.
 
 ---
 
-## Security notes (local dev appropriate)
+## Known Bugs & Issues
 
-- JWT access (15 min) + refresh (7 days) via `python-jose`
-- bcrypt password hashing — direct `bcrypt` library (cost factor 12)
-- 6-digit OTP for email verification — bcrypt-hashed, 10-min expiry, max 5 attempts
-- Pydantic validates every request body
-- CORS locked to `http://localhost:5173` by default
-- `slowapi` rate-limits auth endpoints (register: 5/min, verify: 10/min, resend: 3/min, login: 10/min)
+These are confirmed gaps discovered through code analysis. They are ordered by severity.
+
+---
+
+### CRITICAL
+
+#### ~~Bug 1 — WebSocket reconnection restarts the interview from scratch~~ ✅ Fixed
+
+**File:** `backend/app/interviews/websocket.py`, `backend/app/interviews/orchestrator.py`, `backend/app/core/redis_client.py`
+
+**Was:** On every new WebSocket connection the server called `orch.start()` and replayed Question 1. The `SessionOrchestrator` state lived entirely in memory and was lost on disconnect.
+
+**Fix applied:**
+- Added `backend/app/core/redis_client.py` — lazy async Redis singleton
+- `SessionOrchestrator` now saves state to Redis on every turn (`_save_state`) and clears it on session end (`_clear_state`)
+- WebSocket handler checks Redis on connect: restore from saved state → recover from DB turns → fresh start (three-way branch)
+- Reconnecting candidates hear their current question again with a `{"type": "resumed"}` event instead of restarting from Q1
+
+---
+
+#### ~~Bug 2 — No concurrent session guard~~ ✅ Fixed
+
+**Files:** `backend/app/interviews/routes.py`, `backend/app/invites/routes.py`
+
+**Was:** `POST /sessions` (and invite start routes) created a new session with no check for an existing active session. Opening the app in two tabs could create conflicting DB rows.
+
+**Fix applied:** All three session-creation endpoints (`start_session`, `start_invite`, `participate_as_creator`) now query for an existing `pending` or `in_progress` session and return `HTTP 409` if one is found before creating a new one.
+
+---
+
+#### ~~Bug 3 — Report generation blocks the HTTP worker (synchronous PDF rendering)~~ ✅ Fixed
+
+**Files:** `backend/app/interviews/websocket.py`, `backend/app/interviews/routes.py`
+
+**Was:** `GET /sessions/{id}/report` ran `render_pdf()` (WeasyPrint, 2–5 s) inline in the async HTTP handler, blocking the entire uvicorn event loop for that worker.
+
+**Fix applied:**
+- `render_pdf` and `upload_bytes` are now called via `loop.run_in_executor(None, ...)` in the `get_report` handler so they run in a thread pool instead of on the event loop
+- The WebSocket `finally` block fires `asyncio.create_task(_generate_report_background(session_id))` — a fire-and-forget coroutine that opens its own DB session, generates the report (also via `run_in_executor`), and stores it so `GET /report` returns instantly on the first visit
+
+---
+
+### HIGH
+
+#### ~~Bug 4 — No rate limiting on session, invite, and resume endpoints~~ ✅ Fixed
+
+**Files:** `backend/app/interviews/routes.py`, `backend/app/invites/routes.py`, `backend/app/resumes/routes.py`
+
+**Was:** Auth endpoints had `slowapi` rate limits. Interview, invite creation, and resume upload routes had none — an attacker could hammer LLM-backed endpoints and accumulate API costs.
+
+**Fix applied:** `@limiter.limit(...)` decorators added on every cost-bearing route, sharing the existing `slowapi` Limiter from `app.auth.routes`:
+- `POST /sessions` — `10/hour`
+- `POST /invites` — `20/hour`
+- `POST /invites/{token}/start` — `5/hour`
+- `POST /invites/{id}/participate` — `10/hour`
+- `POST /resumes` and `POST /resumes/process` — `30/hour`
+
+---
+
+#### ~~Bug 5 — No React Error Boundary~~ ✅ Fixed
+
+**Files:** `frontend/src/components/ErrorBoundary.tsx` (new), `frontend/src/main.tsx`
+
+**Was:** An unhandled JavaScript exception unmounted the entire React tree, leaving the candidate on a blank white screen with no recovery path.
+
+**Fix applied:** New `ErrorBoundary` component (class-based, uses `getDerivedStateFromError` + `componentDidCatch`) wraps the entire `<App />` tree in `main.tsx`. The fallback UI matches the editorial design system and offers two recovery paths: reload the page or navigate back to `/dashboard`. In dev builds the captured stack trace is shown for debugging.
+
+---
+
+#### ~~Bug 6 — `JWT_SECRET` defaults to `"change-me"`~~ ✅ Fixed
+
+**Files:** `backend/app/core/config.py`, `backend/app/main.py`
+
+**Was:** A staging or production deploy that forgot to set `JWT_SECRET` would silently sign every token with the publicly known default `"change-me"`.
+
+**Fix applied:** Added an `ENV` setting (`development` | `staging` | `production`, default `development`) and a `Settings.assert_jwt_secret_is_safe()` method that runs in the FastAPI startup lifespan. It blocks any known-insecure default (`change-me`, `change-me-to-a-long-random-string`, `secret`, `your-secret-here`, anything under 16 chars) — but only when `ENV != development`, so local dev and `pytest` keep working with a loud warning instead.
+
+---
+
+#### ~~Bug 7 — No WebSocket heartbeat / keepalive~~ ✅ Fixed
+
+**File:** `backend/app/interviews/websocket.py`
+
+**Was:** The WebSocket had no ping/pong frames. Load balancer idle timeouts (~60s) silently dropped the connection during quiet periods of an interview.
+
+**Fix applied:** A `heartbeat()` task runs alongside the existing `consume_transcripts()` consumer. Every 30 seconds it sends `{"type": "ping"}` on the socket (under the existing `send_lock`, with a 5s send timeout). The receive loop also accepts `{"type": "pong"}` from the client as a no-op so symmetric ack-style clients aren't treated as malformed traffic. Both task lifecycles are owned by the WS handler — `keepalive.cancel()` runs in the same `finally` block as `consumer.cancel()`.
+
+---
+
+### MEDIUM
+
+#### ~~Bug 8 — Resume text injected into LLM prompts without sanitization~~ ✅ Fixed
+
+**Files:** `backend/app/interviews/agent.py`, `backend/app/interviews/websocket.py`
+
+**Was:** Extracted résumé text was interpolated directly into the LLM system prompt. A crafted résumé could embed instructions that the model might follow (`"Ignore previous instructions…"`).
+
+**Fix applied:** Two helpers in `agent.py` enforce a clean prompt boundary:
+- `_sanitize_resume_text(text)` — strips C0/C1 control codes (except `\n`/`\t`), Unicode line/paragraph separators, and caps at `MAX_RESUME_PROMPT_CHARS = 8000` chars.
+- `_sanitize_resume_obj(obj)` — recursively cleans every string value of a parsed-resume dict and caps each individual field at `MAX_RESUME_FIELD_CHARS = 1500` so one bloated field can't dominate the prompt budget.
+
+Both `generate_question_plan()` and `decide_next_turn()` now run their resume input through these helpers, and `_build_resume_summary()` in the WebSocket handler also sanitizes before truncation (defense in depth). The system prompt remains the policy boundary — the sanitizer is just there to give it a stable, bounded input.
+
+---
+
+#### ~~Bug 9 — No invite resend mechanism~~ ✅ Fixed
+
+**File:** `backend/app/invites/routes.py`
+
+**Was:** If the original invitation email went to spam or the link expired, the creator had to create an entirely new invite (with new questions and a new token) just to nudge the candidate.
+
+**Fix applied:** New `POST /invites/{invite_id}/resend` endpoint (creator-only, rate-limited at `10/hour`):
+- 404 if the invite doesn't belong to the requesting creator
+- 410 if the invite has been revoked
+- Otherwise rotates `token`, resets `expires_at` to `now + INVITE_EXPIRY_HOURS`, and re-fires `send_invite_email` to every invitee on the invite (best-effort, per-invitee failures are logged and reported in the response)
+- Returns the new `invite_url`, `expires_at`, plus the `sent_to` / `failures` lists so the creator's UI can show which addresses succeeded.
+
+The old token stops working immediately — resend is "fresh link" semantics, not "send the same link again."
+
+---
+
+#### ~~Bug 10 — No email notification to creator when candidate completes~~ ✅ Fixed
+
+**Files:** `backend/app/core/email.py`, `backend/app/interviews/websocket.py`, `backend/app/interviews/routes.py`
+
+**Was:** When a candidate finished an invited interview, the creator had to manually refresh the dashboard to find out.
+
+**Fix applied:**
+- New `send_completion_notification_email()` in `app/core/email.py` (matches the existing branded HTML layout, surfaces the candidate's name + email, the role, the overall score, and a deep link to `/invites/{id}/results`).
+- `_notify_creator_of_completion()` in `websocket.py` runs as the last step of the existing post-completion background task: it loads the invite + creator, skips if the candidate IS the creator (self-test sessions don't email the creator), and SMTP-sends best-effort.
+- The HTTP `POST /sessions/{id}/end` route now also schedules the same background task on the actual `pending → completed` transition, so manual ends still notify.
+- Idempotent: the background task no-ops if a `Report` row already exists, preventing duplicate emails when both the WS `finally` block and the HTTP end fire.
+
+---
+
+#### ~~Bug 11 — `invite_url` not displayed on the invites dashboard~~ ✅ Fixed
+
+**File:** `frontend/src/pages/InvitesDashboardPage.tsx`
+
+**Was:** `invite_url` was present in the `InviteSummary` API response but never rendered. Creators couldn't grab the link to share manually if email delivery failed.
+
+**Fix applied:** New `COPY` button per row that calls `navigator.clipboard.writeText(inv.invite_url)` and emits a `sonner` toast. Grid now `grid-cols-[1fr_auto_auto_auto_auto_auto]` to fit the extra action between the lifecycle badge and `PARTICIPATE →`.
+
+---
+
+#### Bug 12 — Candidate has no upload path for résumé during invite flow
+
+**File:** `frontend/src/pages/InviteLandingPage.tsx`
+
+**Problem:** If a candidate invited for the first time has never used the system, they have no résumé on file. The invite landing page does not offer any way to upload one before starting. The interview proceeds without a résumé, which degrades question quality for `ai_generated` and `jd_based` modes.
+
+**Fix needed:** After sign-in and before the "Start interview" button, check whether the user has any résumé on file. If not, show a lightweight upload step (or a "skip" option with a warning).
+
+---
+
+#### ~~Bug 13 — ScriptProcessorNode is deprecated~~ ✅ Fixed
+
+**Files:** `frontend/public/pcm-worklet.js` (new), `frontend/src/hooks/useMicStream.ts`
+
+**Was:** Mic capture used `ScriptProcessorNode` (deprecated everywhere; runs on the main thread).
+
+**Fix applied:** New `pcm-worklet.js` `AudioWorkletProcessor` runs on the audio thread, downsamples to 16kHz mono Int16LE, and posts fixed-size 256-sample frames over `MessagePort`. `useMicStream.ts` loads it via `audioContext.audioWorklet.addModule('/pcm-worklet.js')` and wires up an `AudioWorkletNode`. The legacy `ScriptProcessorNode` path is kept as a fallback for environments that refuse to load the worklet (older Safari, `file://` origins). Wire format downstream is unchanged — the WS still receives 16kHz PCM Int16LE chunks.
+
+---
+
+### LOW
+
+#### ~~Bug 14 — Candidate audio not recorded for replay~~ ✅ Fixed
+
+**Files:** `backend/app/interviews/websocket.py`, `backend/app/reports/generator.py`, `backend/app/interviews/routes.py`
+
+**Was:** `TranscriptPlayer` already expected `audio_url`, and `Turn.audio_key` already existed on the model — but no code path actually persisted candidate audio anywhere. The replay UI fell through to the "audio playback isn't available" branch on every report.
+
+**Fix applied:**
+- The WS handler now duplicates every inbound PCM frame into a per-turn `bytearray` accumulator (capped at ~12 MB / 6 min so a stuck-mic doesn't OOM the worker).
+- On every real turn boundary (`next_question` / `ask_followup` / session end — nudges keep the same buffer so multi-utterance answers stay together), the buffer is snapshotted, cleared, and fired into a background `_save_turn_audio` task.
+- That task encodes the raw int16 PCM into a WAV via `wave.open(..., "wb")` (16kHz, mono, 16-bit), uploads to MinIO at `audio/{user_id}/{session_id}/{turn_id}.wav` via `loop.run_in_executor`, and persists `Turn.audio_key`.
+- `build_report_summary` now stores `audio_key` per turn (not a presigned URL — those expire), and `GET /sessions/{id}/report` re-signs each key into a fresh 1-hour `audio_url` on every fetch before returning.
+- Best-effort throughout — a MinIO outage logs and skips, never crashing the interview.
+
+---
+
+#### ~~Bug 15 — Test coverage is critically thin~~ ⚠️ Improved (still partial)
+
+**File:** `backend/tests/`
+
+**Was:** Only 6 tests existed, covering scoring math and JWT crypto.
+
+**Fix applied:** Added 5 new pure-unit test files (63 new tests, 69 total in suite — `pytest` reports `69 passed in 1.29s`):
+- `test_resume_sanitizer.py` (12 tests) — control-char stripping, Unicode separator handling, length caps, recursive object cleaning (Bug 8 helpers).
+- `test_invite_service.py` (11 tests) — token generation, expiry math, lifecycle validation, attempts-remaining math.
+- `test_orchestrator_helpers.py` (23 tests) — `_wants_to_stop_interview` regex coverage, `_meaningful_word_count` filler-stripping, sanity-checks on `NUDGE_CAP` / `FOLLOWUP_CAP` / `FOCUS_VIOLATION_LIMIT`.
+- `test_question_set_scrub.py` (8 tests) — bracketed-placeholder scrubber for invite question sets.
+- `test_jwt_safety.py` (9 tests) — `assert_jwt_secret_is_safe()` blocks staging/production with placeholders or short secrets, warns-only in development.
+
+Still pending (require DB / WebSocket fixtures): full route integration tests for `auth` / `sessions` / `invites`, and an E2E WebSocket protocol test. Those were intentionally scoped out of this batch; the unit tests above cover all the pure helper logic that was previously untested.
+
+---
+
+## Improvement Roadmap
+
+Ordered by impact-to-effort ratio.
+
+### Short-term (1–2 weeks each)
+
+| # | Feature | Description |
+|---|---|---|
+| 1 | ~~**Copy invite link on dashboard**~~ ✅ | ~~Add clipboard button per invite row.~~ Done — `COPY` button per row in `InvitesDashboardPage`. |
+| 2 | ~~**Resend invite email**~~ ✅ | ~~`POST /invites/{id}/resend` — regenerate token, reset expiry, re-fire email.~~ Done — see `resend_invite` in `invites/routes.py`. |
+| 3 | ~~**Creator notification on completion**~~ ✅ | ~~Email creator when a candidate finishes.~~ Done — fires from the post-completion background task; idempotent across WS+HTTP completion paths. |
+| 4 | ~~**Question progress indicator**~~ ✅ | ~~Show "Q{n} of {total}" in predefined mode.~~ Done — backend stamps `q_index` / `q_total` on every `ai_question` WS frame; `QuestionCard` renders `{n} OF {total}` next to the `Q{n}` marker (stable across follow-ups since they keep the same primary index). |
+| 5 | ~~**Error Boundary + Sentry**~~ ⚠️ Partial | ~~Prevents blank white screen on JS errors.~~ Error Boundary done (`frontend/src/components/ErrorBoundary.tsx`); Sentry wiring still pending. |
+| 6 | ~~**Async report generation**~~ ✅ | ~~Move WeasyPrint out of the HTTP handler into a background task.~~ Done — `run_in_executor` + WS fire-and-forget background task. |
+| 7 | ~~**Concurrent session guard**~~ ✅ | ~~Single DB query before `POST /sessions`.~~ Done — 409 guard on all three session-creation endpoints. |
+| 8 | ~~**Startup check for `JWT_SECRET`**~~ ✅ | ~~One-line assert in `config.py`.~~ Done — `Settings.assert_jwt_secret_is_safe()` runs in lifespan; blocks `ENV != development` boots with placeholder secrets. |
+
+### Medium-term (2–4 weeks each)
+
+| # | Feature | Description |
+|---|---|---|
+| 9 | ~~**WebSocket reconnection via Redis**~~ ✅ | ~~Persist orchestrator state; resume mid-interview on reconnect.~~ Done — Redis state saved on every turn, restored on reconnect. |
+| 10 | ~~**AudioWorklet migration**~~ ✅ | ~~Replace deprecated `ScriptProcessorNode`.~~ Done — `frontend/public/pcm-worklet.js` runs on the audio thread; `ScriptProcessorNode` kept as a fallback. |
+| 11 | ~~**Rate limiting on core routes**~~ ✅ | ~~Protect LLM-backed endpoints from abuse.~~ Done — `slowapi` decorators on every cost-bearing route. |
+| 12 | ~~**Score trend chart on dashboard**~~ ✅ | ~~Line chart of `overall_score` across sessions.~~ Done — `ScoreTrend` component renders an inline-SVG sparkline (no charting library) on `DashboardPage`; auto-hides when there are fewer than 2 scored sessions. |
+| 13 | ~~**Full transcript export**~~ ✅ | ~~"Download transcript" button on the report page.~~ Done — `downloadTranscript()` in `ReportPage` builds a plain-text Q/A transcript from `summary.turns` and triggers a Blob download. |
+| 14 | **Resume upload on invite landing page** | Optional upload step if candidate has no résumé on file. |
+| 15 | ~~**Résumé prompt injection defense**~~ ✅ | ~~Character-limit + strip pass before LLM injection.~~ Done — `_sanitize_resume_text` / `_sanitize_resume_obj` in `interviews/agent.py`. |
+| 16 | ~~**WS heartbeat / keepalive**~~ ✅ | ~~Server-side ping every 30s to defeat load-balancer idle timeouts.~~ Done — `heartbeat()` task pings every 30s under the existing send lock. |
+| 17 | ~~**Test suite**~~ ⚠️ Partial | ~~Auth, sessions, invites, orchestrator unit tests.~~ 63 new pure-unit tests across sanitizer / invite service / orchestrator helpers / scrubber / JWT safety (69 total, all green). Route + WS integration tests still pending. |
+
+### Long-term (1–3 months each)
+
+| # | Feature | Description |
+|---|---|---|
+| 18 | **Question set library** | Save and reuse `QuestionSet` rows across invites. `QuestionSet` model exists — add a name field and library UI. |
+| 19 | ~~**Candidate audio replay**~~ ✅ | ~~Store mic audio chunks in MinIO per turn; surface playback on report page.~~ Done — WS handler buffers PCM per turn, encodes WAV, uploads to MinIO; report endpoint presigns `audio_url` per turn. |
+| 20 | **Scheduled / future-dated invites** | Add `starts_at` to `InterviewInvite`; enforce at `/start`. Useful for assessment windows. |
+| 21 | **Team / organization accounts** | `Organization` model + `org_id` FK on invites. Multiple interviewers under one org. |
+| 22 | **Webhook on interview completion** | `POST /webhooks` registration; fire signed payload to creator's URL on session end. Enables ATS integration. |
+| 23 | **Completion email with PDF report** | Attach the generated PDF to the completion email sent to the candidate. |
+| 24 | **Multi-language support** | Deepgram supports 30+ languages; surface a language selector on the invite creation form. |
+| 25 | **CDN for MinIO assets** | Put CloudFront (or equivalent) in front of MinIO; use short-lived presigned URLs on private résumés. |
+| 26 | **Bulk invite via CSV** | Let creators upload a CSV of emails instead of typing them one by one. |
+| 27 | **Structured logging + error tracking** | Replace plain `logging` with `structlog` (JSON output) + Sentry on both frontend and backend. |
+
+---
+
+## Strategic Roadmap — Path to Market-Ready SaaS
+
+> Everything above this section is **tactical** — bug fixes, hardening, and small features that make the existing product more solid. This section is **strategic** — what it would take to evolve this from a strong functional prototype into a competitive agentic-AI SaaS that can actually win enterprise hiring deals.
+>
+> The structure below maps to the standard 9-layer reference architecture for production agentic systems (User → Orchestration → Agents → Tools → Memory → Monitoring → Reliability → Governance → Foundation). Each phase is sequenced so that earlier work compounds — skipping ahead (e.g. integrations before multi-agent depth) is the most common way these products end up commoditized.
+
+### Architecture gap audit
+
+A frank look at where the codebase sits today vs. where a production agentic-AI SaaS needs to be:
+
+| Layer | Current state | Production gap |
+|---|---|---|
+| **User / Client** | React app with candidate + creator flows | Multi-tenant org/team UI, white-label theming, embeddable widget for career pages |
+| **Orchestration** | Single `SessionOrchestrator` (per-session FSM) | Multi-agent control plane: planner, router, scheduler, policy enforcer |
+| **Agents** | One `agent.py` (a single LLM call per turn) | Specialized agents — Research, Question, Evaluation, Feedback, Verifier |
+| **Tools & Integrations** | Internal-only HTTP/WebSocket | Public REST + Webhook API, ATS connectors, calendar, Slack/Teams |
+| **Memory** | Per-turn DB rows + 3-hour Redis state | Short / long / episodic memory layers; cross-session vector recall; org-level memory |
+| **Monitoring** | Plain `logging` + uvicorn output | OpenTelemetry traces, LLM-call observability, anomaly detection, eval suites |
+| **Reliability** | Best-effort `try`/`except` blocks | SLOs + error budgets, circuit breakers, provider fallback, DLQ, idempotency keys |
+| **Governance** | JWT + bcrypt + CORS + rate limits | RBAC, audit logs, data residency, SOC 2 / GDPR / HIPAA, BYOK, bias monitoring |
+| **Foundation** | docker-compose + Postgres / Redis / MinIO | Managed services, Kubernetes, multi-region, CDN, cost dashboards |
+
+The diagonal pattern is intentional — it's normal for a strong prototype. The goal of this roadmap is to walk it row by row, in order, without skipping rows.
+
+---
+
+### Phase 1 — AI Intelligence Layer (the depth gap)
+
+**This is the differentiation layer.** The dozen me-too AI interview tools on the market all do "single LLM call per turn" — that's a commodity. The IP lives in this phase. *(Largely the user's framing, expanded.)*
+
+#### 1.1 True multi-agent system
+
+Replace the monolithic `agent.decide_next_turn()` call with a small fleet of specialized agents orchestrated by a Planner:
+
+| Agent | Responsibility | Owns |
+|---|---|---|
+| **Planner** | At session start, decomposes the goal ("interview this candidate for Senior Backend") into a turn-by-turn execution plan. Reroutes mid-flight on failure. | The orchestration loop |
+| **Research Agent** | Reads parsed résumé + role + JD; identifies 3–5 likely weak areas to probe; outputs targeting hints. | Pre-session prep |
+| **Question Agent** | Picks the next question from the plan + targeting hints + adaptive difficulty signal. | "What to ask" |
+| **Evaluation Agent** | Scores the cumulative answer across the multi-dim rubric. Generates per-turn rationale. | Per-turn scoring |
+| **Verifier Agent** | Second-pass review of every Evaluation Agent score using a different prompt (and ideally a different model). Disagreements > threshold queue for human review. | Calibration |
+| **Feedback Agent** | At session end, synthesizes per-turn evals into the final report with strengths, improvements, and a coaching narrative. | Final report |
+
+Concrete code change: extract from [agent.py](backend/app/interviews/agent.py) into `app/agents/{planner,research,question,evaluator,verifier,feedback}.py`. Each agent is a separate prompt + DB write boundary; they communicate through a typed message bus rather than implicit shared state. Persist agent traces (prompt, response, model, tokens, cost, latency) on each call — this becomes the observability backbone of Phase 6.
+
+#### 1.2 Advanced multi-dimensional scoring engine
+
+Today's rubric is four dimensions (`clarity`, `depth`, `correctness`, `communication`) — all from a single LLM judgment, which is the noisiest possible signal. Combine LLM judgment with deterministic signals:
+
+```jsonc
+{
+  "technical_depth":   8,    // LLM rubric (Evaluator Agent)
+  "problem_solving":   6,    // LLM rubric (Evaluator Agent)
+  "communication":     7,    // LLM rubric (Evaluator Agent)
+  "confidence":        5,    // prosody — pace, fillers, pauses (post-process Deepgram word timings + utterance gaps)
+  "consistency":       6,    // semantic similarity vs. prior answers (pgvector cosine)
+  "structure":         7,    // STAR / problem-solution detection (regex + LLM verifier)
+  "keyword_coverage":  0.62  // expected-skill keyword recall against the role's skill graph
+}
+```
+
+The deterministic signals (`confidence`, `consistency`, `keyword_coverage`) are the highest-leverage additions because:
+
+1. They cover dimensions the LLM is genuinely bad at (prosody, cross-answer consistency).
+2. They defend against memorized / rehearsed answers (a candidate parroting a prepared response will score high on the LLM rubric but have abnormal `consistency` / `confidence` distributions).
+3. They produce calibrated numerical scores rather than LLM hallucinated integers.
+
+This becomes the **core IP** — the rubric, weights, and the embedding library are what hiring teams pay for.
+
+#### 1.3 Adaptive difficulty
+
+Maintain a running difficulty rating per session and adjust on each turn:
+
+- Strong answer (overall ≥ 7) → bump difficulty by **+0.5**, prefer follow-ups that probe edge cases
+- Weak answer (overall ≤ 4) → bump by **–0.5**, simplify the next planned question and offer a hint
+- Persist the curve in a new `Session.difficulty_curve: list[float]` JSONB column so the report can show calibration ("started at 5.0, ended at 7.5 — strong candidate, interview should have been harder").
+
+This is where the system stops feeling like scripted Q&A and starts feeling like a real interviewer. It also produces signal for hiring teams: an interview that ramped to 8.5 and held there is much more informative than one that started at 5 and drifted.
+
+#### 1.4 Skill graph evaluation
+
+Per-role skill graphs (e.g. `senior_backend.json`: `["system design", "sql", "distributed systems", "concurrency", "leadership", "mentoring", "incident response"]`). Each turn maps to one or more skill nodes; the report shows which skills were touched, which were strong, which were thin.
+
+Implementation: a `skill_graphs/{role_slug}.json` library, a new `Turn.skill_tags: list[str]` JSONB column populated by the Evaluator Agent, and a "Skill coverage" panel on `ReportPage` adjacent to `ScoreBars`.
+
+The skill graph also unlocks **growth tracking** — the dashboard shows per-skill score over time across sessions, not just an overall trend.
+
+#### 1.5 Memory layer expansion
+
+Map directly onto the reference architecture's Memory layer:
+
+| Memory type | Status | Required changes |
+|---|---|---|
+| **Short-term** (in-session context) | ✅ Covered by Redis orchestrator state | — |
+| **Long-term** (cross-session per-user vector memory) | ❌ Missing | Index every answer into pgvector keyed by `(user_id, skill_tag)`; Question Agent retrieves "this user struggled with concurrency 2 sessions ago — probe again" |
+| **Episodic** (timeline across sessions) | ⚠️ Partial — `ScoreTrend` is the first slice | Add a "growth" view: skill graph progress over time, weak-area tracking, calibration drift |
+| **Knowledge base** (interview frameworks, role descriptions) | ❌ Missing | Embed canonical content (STAR, BAR, behavioral interviewing, role competency rubrics) as retrievable docs; Evaluator Agent retrieves the relevant fragment as grounding before scoring |
+| **User / Org profile store** | ❌ Missing | Per-user preferences (preferred difficulty, languages, coaching focus); per-org rubric weights, branding, default settings |
+
+#### 1.6 LLM-as-judge with calibration
+
+The Verifier Agent (1.1) is one half of this. The other half is a **continuous calibration metric**: weekly export the (Evaluator score, Verifier score) pairs, compute Cohen's kappa, alert on drops. Below a threshold, increase Verifier weight; below an absolute floor, route flagged sessions to a human reviewer queue.
+
+Bonus: collect human-reviewer scores as supervised labels, periodically fine-tune a smaller model on them — drives down per-session LLM cost over time without sacrificing quality. This is the path from "LLM API spend is our biggest line item" to "we own the model".
+
+---
+
+### Phase 2 — Multi-tenancy & business primitives (the SaaS gap)
+
+The current data model assumes **one user = one workspace**. To sell to teams (the only actually viable B2B motion for this product), the entire schema needs a tenancy boundary.
+
+- **Organizations + teams + roles** — new `organizations`, `org_members`, `teams` tables; every `Session`, `InterviewInvite`, `Resume`, `Report`, `QuestionSet` gains an `org_id` FK; every query filters by `org_id`. Roles: `owner` / `admin` / `interviewer` / `reviewer` / `member` with an explicit permission matrix. SQLAlchemy event hooks to enforce `org_id` at the ORM layer (defence-in-depth — application bugs shouldn't leak across tenants).
+- **Billing & subscriptions** — Stripe metered billing on minutes-per-completed-session; subscription tiers (`free` / `pro` / `team` / `enterprise`); seat-based pricing for team tier; invoice + receipt UX; webhook handlers for `customer.subscription.*` events.
+- **Usage metering & quotas** — `usage_events` table (event type + tenant + cost + timestamp); enforce hard caps (free tier: 30 min/mo, etc.); soft alerts at 80%; per-tenant usage dashboard.
+- **White-label / per-tenant theming** — tenant-level CSS variable overrides + logo upload; custom email sender domain (DKIM-signed); custom subdomain (`hiring.companyname.com`) with TLS via Let's Encrypt + ACME.
+- **Per-tenant configuration** — custom rubric weights, custom question library, custom focus presets, branded email templates, custom interview duration ranges, custom skill graphs.
+- **Tenant-scoped audit logs** — immutable `audit_events` log per tenant: who saw which candidate, who modified which rubric, when. Required for SOC 2 + GDPR.
+- **Tenant deletion** — full cascade including MinIO objects + Redis keys + Stripe subscription cancellation. GDPR-mandatory.
+
+---
+
+### Phase 3 — Integrations & ecosystem (Tools layer)
+
+The current product is a closed loop. To plug into existing recruiter workflows, where the actual hiring lives:
+
+- **Public REST + Webhook API** — versioned `/api/v1/public` namespace with API keys per tenant (rotatable, scoped); webhooks fire on `session.started`, `session.completed`, `invite.accepted`, `report.ready`, with HMAC-signed payloads + automatic retries with exponential backoff + DLQ.
+- **ATS connectors** — Greenhouse, Lever, Workday, Ashby. Pull candidate stage / push interview score into their pipeline. Most ATSs have stable REST APIs; one connector per quarter is a realistic cadence.
+- **Calendar / scheduling** — Google Calendar + Outlook OAuth; let invitees self-schedule a window; push the interview invite as a calendar event with the link embedded; auto-cancel on revocation.
+- **Slack / Teams bots** — drops `New candidate completed: 7.4/10 (Sarah K., Senior Backend)` cards into the hiring channel with a deep link; thread replies for collaborative review; reaction-based scoring overrides.
+- **Embeddable widget** — JS snippet for company career pages: "Take a 10-min interview before you apply" → spawns a session, returns a verifiable score badge; conversion uplift on noisy applicant pools.
+- **CSV bulk invite** (already in roadmap as item 26) — upgrade this to the marquee onboarding flow for hiring teams.
+- **Public report URLs** with consent — candidate can share a verified score with hiring teams (anti-fraud: signed JWT in URL, view-tracking, optional one-time-view).
+- **CLI / SDK** — `pip install rehearsal-sdk` + `npm i @rehearsal/sdk` for easy programmatic invite + result fetching; expands TAM into engineering-led hiring teams.
+
+---
+
+### Phase 4 — Memory & Knowledge layer
+
+Today's pgvector index is populated at résumé upload but never read back. Make it load-bearing.
+
+- **Cross-session retrieval** — at session start, pull the user's last N answers in the same role/skill cluster; Question Agent uses them as targeting hints (`"last time on system design, the candidate skipped redundancy — probe that"`).
+- **Role / skill / framework knowledge base** — embed the canon (STAR, BAR, common system-design playbooks, role-specific competency rubrics, leveling guides from Big Tech). Evaluator Agent retrieves the relevant fragment as grounding before scoring.
+- **Episodic timeline** — per-user "career rehearsal" view: every session as a node, score trends, skill graph progress over time. ([ScoreTrend](frontend/src/components/dashboard/ScoreTrend.tsx) is roughly the first 5% of this.)
+- **Org-level memory** — for hiring teams: index every candidate's answers, search by skill (`"show me all candidates who answered well on distributed locks"`); compare candidates side-by-side on the same skill node.
+- **PII-stripped vector index** — for the long-term store; reversible map kept tenant-side for re-identification on retrieval. Required for GDPR and for safely using third-party embedding providers.
+
+---
+
+### Phase 5 — Reliability & failure management
+
+Production AI workloads fail in ways the current best-effort `try/except` blocks don't catch.
+
+- **SLOs & error budgets** — explicit numerical targets:
+  - 99.5% session-completion rate
+  - p95 turn-latency ≤ 4s end-of-user-speech to start-of-AI-speech
+  - 0% silent score loss (every completed turn must produce a persisted score)
+
+  Burn-rate alerts at 2× and 5× expected error rate.
+- **Circuit breakers per LLM provider** — open after N consecutive failures; route to fallback provider (Groq → OpenAI → cached degraded response). Today [llm_provider.py](backend/app/core/llm_provider.py) exposes only a single provider — needs a primary/secondary array with auto-failover on 5xx or timeout, plus per-provider latency + cost tracking.
+- **Background job hardening** — Celery is set up in [workers/celery_app.py](backend/app/workers/celery_app.py) but never triggered from outside the workers package. Replace ad-hoc `asyncio.create_task` for report generation with Celery tasks: per-task retry budget, dead-letter queue, observability via Flower/Celery-exporter, separate worker pool for CPU-bound (WeasyPrint) vs IO-bound (LLM/SMTP) work.
+- **Idempotency keys on every write endpoint** — `Idempotency-Key` header to defend against retried POSTs, especially for billing-relevant mutations and the new `POST /invites/{id}/resend`.
+- **Disaster recovery** — point-in-time Postgres restore tested quarterly; MinIO → S3 versioning + cross-region replication; runbook for "lose entire region" scenario.
+- **Graceful degradation** — when the LLM provider is fully down: serve `predefined` mode plans only (no LLM call needed at session start), surface a "limited mode" banner, queue full-rubric scoring for retry against the fallback provider when it returns.
+- **Concurrency stress-test** — load test 100 concurrent WS sessions; verify Redis throughput, Postgres pool size, MinIO upload bandwidth; tune `pool_size` / `max_overflow` accordingly.
+
+---
+
+### Phase 6 — Monitoring, observability & ML Ops
+
+The diagram's Monitoring layer is currently `print(...)` and uvicorn console output. Production needs:
+
+- **OpenTelemetry distributed tracing** — span the full request: HTTP → orchestrator → STT → LLM → TTS → WS send. Critical for understanding p95 latency *which subsystem is the culprit*. Export to Tempo / Honeycomb / Datadog APM.
+- **LLM-call observability** — Langfuse / Helicone / Phoenix: every prompt + response + token count + cost + latency + model, queryable. Enables prompt iteration on real production data — currently impossible because we have no record of historical LLM calls.
+- **Structured logging** — `structlog` JSON output, ship to Datadog / Loki / CloudWatch. Stop greping the uvicorn console.
+- **Sentry on both ends** — frontend + backend. Group by tenant. Error Boundary already feeds the hook in development; production needs DSN + release tagging.
+- **Custom business metrics** — TTFT (time to first token), TBT (time between turns), interview-completion rate, score distribution per role, average tokens per session, cost per completed interview. Per-tenant, per-role.
+- **Eval datasets** — golden set of (answer, expected score) pairs; CI runs `decide_next_turn` against them on every PR; alert on regression. Without this, prompt tweaks ship blind.
+- **Drift detection** — score distribution per role tracked weekly; alert when the mean drifts > 0.5 (model degradation, prompt regression, or population shift).
+- **Anomaly detection** — sudden drop in completion rate, sudden spike in TTS latency → page oncall.
+- **A/B testing infrastructure** — flag-gated prompt variants (LaunchDarkly / Unleash / homegrown); statistical comparison of outcomes (completion rate, candidate satisfaction).
+- **Real-User Monitoring** — Datadog RUM / FullStory on the candidate-facing pages; identifies UX failure modes (mic-permission-denied, network hiccup) that backend logs miss.
+
+---
+
+### Phase 7 — Governance, security & compliance
+
+Hiring data is sensitive (PII, often legally protected categories). To sell to enterprise:
+
+- **SOC 2 Type II** — 6-month attestation cycle. Required for most enterprise sales > $50k. Vanta / Drata / Secureframe automates ~70% of the controls.
+- **GDPR + CCPA compliance** — data export endpoint (`GET /me/export` returning a tar.gz of every session, transcript, audio file, score), data deletion endpoint with confirmed cascade across Postgres + MinIO + Redis + Stripe + LLM provider memory; DPA template; sub-processor disclosures.
+- **HIPAA-ready posture** (for healthcare hiring) — BAA with cloud + LLM providers (OpenAI / Azure offer this; Groq does not as of Jan 2026 — affects provider selection for HIPAA tier).
+- **Data residency** — EU-only deployment option (frontend + backend + DB + MinIO + LLM provider region all pinned to EU). Required for some EU enterprise procurement processes.
+- **Audit logs** — every read of candidate data, every score override, every config change. Append-only, exportable, retained per regulatory minimum (typically 7 years).
+- **Customer-managed keys (BYOK)** — enterprise tier: tenant-supplied KMS key encrypts résumés + answer audio at rest. Differentiator vs. competitors.
+- **PII scrubbing on LLM call** — strip names, emails, phone numbers from prompts that hit external providers (reversible map kept tenant-side). The new `_sanitize_resume_obj` is the foundation; needs to expand into a full named-entity scrub.
+- **Bias / fairness monitoring** — score distribution by inferred demographic proxies (résumé name origin, accent cluster, education tier); alert on statistically significant gaps; publish a fairness report quarterly. **Required by EEOC for any AI in hiring** in the US, and by the EU AI Act for high-risk AI systems.
+- **Dependency security** — `pip-audit` + `npm audit` + Renovate / Dependabot in CI; SBOM published per release; signed container images.
+- **Penetration testing** — annual third-party pen test; vulnerability disclosure program (HackerOne / `security.txt`).
+- **Secret rotation** — automated rotation for `JWT_SECRET`, S3 keys, SMTP creds, LLM API keys (the new [config.py](backend/app/core/config.py) safety check is a starting point; rotation automation is the next step).
+- **mTLS or signed-payload between services** — once the monolith decomposes (Phase 1 multi-agent split is the trigger).
+
+---
+
+### Phase 8 — Foundation / infrastructure maturation
+
+The `docker-compose` stack is great for local dev; production needs more:
+
+- **Managed services** — Postgres → RDS / Neon / Supabase; Redis → ElastiCache / Upstash; MinIO → S3 + CloudFront; SMTP → SendGrid / Postmark / SES.
+- **Container registry + Kubernetes** — multi-replica backend with HPA on CPU + queue depth; rolling deploys; PDB for graceful drain on the WebSocket worker pool (long-lived connections need careful handling).
+- **Multi-region** — at minimum US + EU; tenant region pinning; latency-based DNS for the static frontend; per-region database with logical replication for shared metadata.
+- **CDN** — CloudFront / Fastly in front of MinIO for résumé downloads + audio playback; static frontend on edge.
+- **CI/CD hardening** — every PR runs unit + route + E2E + lint + type + security scan; deploy on green main; canary releases (5% → 25% → 100%); automated rollback on error-rate spike or SLO burn.
+- **Cost dashboards per tenant** — LLM tokens, STT minutes, TTS minutes, storage, egress — broken down per org. Critical for usage-based pricing and unit economics.
+- **Backup / DR drill** — daily PITR Postgres backups + weekly cross-region snapshot; restore drill quarterly; runbook published.
+
+---
+
+### Phase 9 — Product polish, UX, and growth
+
+The fundamentals are solid. To convert from "working product" to revenue:
+
+- **Multi-language support** — Deepgram supports 30+ languages; ElevenLabs supports many; surface a language picker on invite creation; persist per-session; translate the frontend (`react-i18next`).
+- **Closed captions during AI speech** — accessibility must-have for enterprise procurement; also a UX win in noisy environments.
+- **Mobile-first interview room** — currently desktop-assumed; mobile candidates are 40%+ of the funnel.
+- **Practice mode** — no scoring, unlimited; converts free → paid, produces eval data, lowers the barrier for first-time use.
+- **Onboarding tutorial** — 60-second walkthrough on first session; the current Rules dialog is good but the candidate still doesn't know what's coming.
+- **Re-record an answer** — current flow is one-shot; nervous candidates abandon. Allow ONE re-record per turn with a clear UI affordance.
+- **AudioWorklet polish** — the worklet now runs but the visualization (Waveform component) still drives off the AnalyserNode; consider a single source of truth.
+- **Pricing tiers** —
+  - **Free**: 30 min/month, no invites, watermarked report
+  - **Pro** ($20/mo): unlimited practice, full report download
+  - **Team** ($200/mo): 10 seats, 100 invites/month, ATS + Slack
+  - **Enterprise** (custom): white-label, BYOK, SSO, audit logs, dedicated CSM
+- **Referral program** — invite a friend → both get 30 free minutes.
+- **LinkedIn share badge** — `Practiced for Senior PM at Rehearsal — 8.2/10` as a verified shareable card. **Free user-acquisition channel that maps directly onto the audience.**
+- **Coach marketplace** (longer-term) — pair AI session with a human review; revenue split with coaches.
+- **Content / SEO** — `/learn/*` pages indexable by Google; "How to answer X" articles; mock-interview templates per role; targets the high-intent "interview prep" search corpus.
+- **Candidate experience NPS** — post-session survey; track per role + per company; expose as a quality metric to hiring teams.
+
+---
+
+### Sequencing recommendation
+
+Don't do all of this in parallel. A pragmatic 12-month sequence for a small (3–6 engineer) team:
+
+| Quarter | Theme | Concrete deliverables |
+|---|---|---|
+| **Q1** | **AI depth** (Phase 1) | Multi-agent split (Research / Question / Evaluator / Verifier / Feedback); multi-dim scoring engine with embeddings + prosody; adaptive difficulty; first eval dataset. |
+| **Q2** | **SaaS primitives** (Phase 2 + slice of 6) | Orgs / teams / RBAC; Stripe metered billing; per-tenant theming; Sentry + structured logs + LLM observability. First 5 paying customers. |
+| **Q3** | **Reliability + compliance** (Phases 5 + 7) | OTel tracing; circuit breakers + provider fallback; SOC 2 Type I audit kickoff; GDPR delete/export; bias monitoring report v1. |
+| **Q4** | **Integrations + growth** (Phases 3 + 9) | First ATS connector (Greenhouse); Slack bot; LinkedIn share badge; pricing-page launch; referral program; multi-language. |
+
+Each phase compounds on the last. **The single most common mistake** in this space is building integrations before AI depth — you end up plugging a commodity AI into existing tools, which means competitors with deeper AI win the same deals once they ship the same integrations. Build the moat first; sell the moat second.
+
+---
+
+## Security Notes
+
+### Current state (correct for local dev)
+
+- JWT access (15 min) + refresh (7 days) — no cookies, CSRF-safe by design
+- bcrypt password hashing — direct `bcrypt` library, cost factor 12
+- 6-digit OTP — bcrypt-hashed in DB, 10-min expiry, max 5 attempts
 - Google ID tokens verified server-side via `google-auth`
-- Password reset tokens are single-use, hashed in DB, expire in 1 hour
+- Password reset tokens — single-use, hashed, 60-min expiry
+- Pydantic validates every request body
+- CORS locked to `CORS_ORIGINS` env var (default: localhost only)
+- `slowapi` rate-limits all auth endpoints
 - All secrets in `.env` (gitignored)
 
+### Must fix before production
+
+| Issue | Risk | Fix |
+|---|---|---|
+| `JWT_SECRET` defaults to `"change-me"` | Anyone can forge JWTs | Startup assertion + strong secret in deploy |
+| No rate limiting on session/invite/resume | API cost abuse | `slowapi` on all LLM-backed routes |
+| Résumé text injected raw into prompts | Prompt injection | Sanitize + length-cap extracted text |
+| MinIO bucket publicly readable | Résumé privacy | Private bucket + presigned URLs |
+| No Content Security Policy headers | XSS escalation | Add CSP middleware to FastAPI |
+| CORS `CORS_ORIGINS` must be exact in production | Credential leakage | Set to `https://yourdomain.com` — no wildcards |
+
 ---
 
-## Known limitations (local-only build)
+## Production Readiness Checklist
 
-- TTS audio is sent as a single MP3 stream per question and decoded client-side (uses `decodeAudioData`); for chunked playback you'd switch to MediaSource Extensions or PCM streaming.
-- Mic capture uses the deprecated `ScriptProcessorNode` for compatibility — production should prefer `AudioWorklet`.
-- `WeasyPrint` requires GTK on Windows; the report falls back to inline HTML if WeasyPrint can't render. PDFs render fine in WSL or Linux containers.
-- Candidate audio is not recorded for report playback — the `TranscriptPlayer` component exists but the upload path is not wired up.
-- Production hosting (TLS, reverse proxy, observability) is intentionally out of scope.
+Use this before any public deployment.
+
+### Infrastructure
+
+- [ ] Postgres on managed service (RDS, Supabase, Neon) with automated backups
+- [ ] Redis on managed service (ElastiCache, Upstash) with persistence enabled
+- [ ] MinIO replaced by real S3 (or kept but behind CloudFront with private bucket)
+- [ ] TLS termination at load balancer; all HTTP redirects to HTTPS
+- [ ] WebSocket upgrade supported by load balancer (ALB sticky sessions or equivalent)
+- [ ] Docker images built and pushed to a registry; no local `myenv` in production
+- [ ] Secrets managed via AWS Secrets Manager / GCP Secret Manager / Vault — not `.env` files
+
+### Application
+
+- [ ] `JWT_SECRET` is a cryptographically random 256-bit string
+- [ ] `CORS_ORIGINS` locked to production domain — no `localhost`
+- [x] Rate limiting enabled on all LLM-backed endpoints
+- [x] Report generation moved to background task (not blocking HTTP)
+- [x] WebSocket reconnection logic implemented (Redis-backed orchestrator state)
+- [x] Concurrent session guard in `POST /sessions`
+- [x] Error Boundary wired up on frontend (Sentry SDK still pending)
+- [ ] Sentry SDK wired up on backend (`sentry-sdk[fastapi]`)
+- [ ] Structured JSON logging (`structlog`) — not plain `logging`
+- [ ] Health check endpoint (`/health`) returns dependency status (DB, Redis, external APIs)
+
+### Database
+
+- [ ] `alembic upgrade head` is part of the deploy pipeline (not manual)
+- [ ] Connection pool tuned: `pool_size`, `max_overflow`, `pool_pre_ping=True`
+- [ ] Indexes verified on all high-frequency query columns (`user_id`, `session_id`, `invite_id`, `email`)
+- [ ] DB user has minimal permissions (no superuser)
+
+### Observability
+
+- [ ] Error tracking (Sentry or equivalent) — both frontend and backend
+- [ ] Uptime monitoring with alerting
+- [ ] LLM API cost dashboard / budget alerts (Groq / OpenAI console)
+- [ ] Log aggregation (CloudWatch, Datadog, Loki)
+- [ ] Key business metrics tracked: interview start rate, completion rate, average score, report generation time
+
+### Security
+
+- [ ] Content Security Policy headers on all responses
+- [ ] Private S3/MinIO bucket — résumés accessed only via short-lived presigned URLs
+- [x] Résumé text sanitized before LLM injection (strip control chars, cap length)
+- [x] `JWT_SECRET` startup assertion added to `config.py`
+- [ ] Dependency audit: `pip audit` + `npm audit` passing
+- [ ] Google OAuth redirect URIs locked to production domain only
+
+### Testing
+
+- [ ] Route integration tests passing in CI
+- [ ] WebSocket protocol tests passing in CI
+- [ ] E2E smoke test: sign up → upload résumé → start interview → answer Q1 → end → view report
+- [ ] Load test: 10 concurrent WebSocket sessions to verify worker pool / Redis throughput
+
+---
+
+## License
+
+MIT
