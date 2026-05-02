@@ -9,13 +9,13 @@ Usage:
 
 from __future__ import annotations
 
-import logging
+import structlog
 
 import redis.asyncio as aioredis
 
 from app.core.config import settings
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger()
 
 _client: aioredis.Redis | None = None
 

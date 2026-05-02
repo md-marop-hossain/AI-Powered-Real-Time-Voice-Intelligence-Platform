@@ -13,10 +13,12 @@ Full-stack web app where a candidate uploads a resume and an AI voice agent runs
 ## Layout
 
 - [backend/app/](backend/app/) — FastAPI app
+  - `agents/` — Phase 1 agent fleet: `base.py` (shared types), `planner.py`, `researcher.py`, `question.py`, `evaluator.py`, `verifier.py`, `feedback.py`
+  - `skill_graphs/` — per-role JSON skill graphs + `__init__.py` loader (`load_skill_graph(role)`)
   - `interviews/` — agent, orchestrator, websocket, stt, tts
   - `invites/` — invitation system: token validation, question-set builders (predefined / AI / JD), routes
   - `auth/`, `resumes/`, `reports/`, `scoring/`, `core/`, `models/`, `schemas/`
-- [backend/alembic/](backend/alembic/) — DB migrations (`0001`–`0006`; `0005_invitations` adds `question_sets`, `interview_invites`, `invitees` + `sessions.invite_id`; `0006_question_set_resume` adds `question_sets.resume_id` for the creator-uploaded candidate résumé in `ai_generated` / `jd_based` modes)
+- [backend/alembic/](backend/alembic/) — DB migrations (`0001`–`0008`; `0005_invitations` adds `question_sets`, `interview_invites`, `invitees` + `sessions.invite_id`; `0006_question_set_resume` adds `question_sets.resume_id`; `0007_phase1_ai_layer` adds `turns.{difficulty_level,skill_tags,verified_scores,verifier_flags}` + `sessions.{difficulty_curve,skill_coverage}`; `0008_invite_starts_at` adds `interview_invites.starts_at`)
 - [backend/tests/](backend/tests/) — pytest suite (`asyncio_mode = "auto"`)
 - [frontend/src/](frontend/src/) — React app
   - `pages/` — includes `CreateInvitePage`, `InviteLandingPage`, `InvitesDashboardPage`, `InviteResultsPage` for the invitation flow
@@ -32,6 +34,15 @@ Full-stack web app where a candidate uploads a resume and an AI voice agent runs
 - **Question progress indicator** — every `ai_question` WS frame carries `q_index` (1-based current primary index) and `q_total` (plan length). `QuestionCard` renders them as `{n} OF {total}` next to the `Q{n}` turn marker. Follow-ups inherit the same indices, so the badge reads stably across a probe sequence.
 - **Score trend** — `DashboardPage` renders `ScoreTrend` (inline-SVG sparkline, no charting lib) showing `overall_score` over time across all completed sessions. Auto-hides when fewer than 2 scored sessions exist.
 - **Transcript export** — `ReportPage` builds a plain-text transcript from `summary.turns` (question + answer + per-turn rationale) and triggers a Blob download via `URL.createObjectURL`. Filename keys off `role` + first 8 chars of `session_id`.
+- **Scheduled invite windows** — `InterviewInvite.starts_at` (nullable) lets creators schedule when a link opens. `validate_invite()` returns a `not_open` error with a human-readable UTC timestamp if the candidate arrives before the window; both `start_invite` and `participate_as_creator` call this path. `CreateInvitePage` exposes a `datetime-local` picker; omitting it means immediately available.
+- **Bulk CSV import** — `CreateInvitePage` has an "Import from CSV" file input that parses the first column as email addresses (header row auto-detected), deduplicates, and merges into the recipients textarea. No new backend endpoint.
+- **Structured logging + Sentry** — `structlog` configured with stdlib bridge in `app/core/logging.py`; JSON output in staging/production, coloured `ConsoleRenderer` in development. `configure_logging()` called first in the FastAPI lifespan (before `assert_jwt_secret_is_safe`). Sentry initialized opt-in via `SENTRY_DSN` env var; frontend opt-in via `VITE_SENTRY_DSN`. All modules use `structlog.get_logger()` instead of `logging.getLogger` — except `config.py`'s `assert_jwt_secret_is_safe()` which runs before structlog is configured and must stay on stdlib so `caplog` capture works in tests.
+- **Phase 1 — Multi-agent AI intelligence layer:**
+  - **6-agent fleet** — PlannerAgent (wraps question generation + research hints), ResearchAgent (cross-session weak-area detection via `session.skill_coverage`), QuestionAgent (pure-Python difficulty calibration), EvaluatorAgent (parallel 7-dim scoring: 5 LLM + 2 deterministic), VerifierAgent (fire-and-forget second-pass LLM judge, writes `verified_scores`/`verifier_flags`), FeedbackAgent (post-session coaching narrative in PDF report).
+  - **7-dimensional scoring** — `technical_depth`, `problem_solving`, `communication`, `structure`, `consistency` (LLM); `confidence` (filler-word ratio + length), `keyword_coverage` (skill graph intersection) (deterministic). Weighted aggregation: LLM × 0.8 + deterministic × 0.2. Old 4-dim sessions auto-detected (v1 path) and scored with equal-weight average — fully backward compatible.
+  - **Adaptive difficulty** — starts at 5.0; +0.5 if avg score ≥ 7.0, −0.5 if ≤ 4.0, clamped to [1.0, 10.0]. Curve persisted in `Session.difficulty_curve`. Question text annotated at extremes (< 3 → gentle scaffold hint; > 7 → no-scaffold note).
+  - **Per-role skill graphs** — JSON files in `skill_graphs/` (backend_engineer, frontend_engineer, data_scientist, product_manager, engineering_manager, default). `Turn.skill_tags` records matched skill IDs per turn; `Session.skill_coverage` aggregates at session end. Report PDF shows a skill coverage panel.
+  - **Cross-session memory** — ResearchAgent queries past sessions with `skill_coverage IS NOT NULL`, surfaces skills averaging < 5.0 as `weak_areas`; PlannerAgent injects them as priority probe hints into the question plan.
 
 ## Interview-mode contract
 
@@ -54,7 +65,7 @@ Four modes coexist, each fully isolated at runtime. The mode is persisted on `se
 
 **Isolation invariants** (don't break these):
 
-- `session.questions_plan` is always `{"questions": [...], "mode": "<one of the four>"}`. Both `interviews/routes.py:start_session` (sets `resume_based`) and `invites/routes.py:start_invite` (sets the invite's question_set type) write this shape.
+- `session.questions_plan` is always `{"questions": [...], "mode": "<one of the four>"}`. For `resume_based` sessions it also carries `"research_hints": {"weak_areas": [...], "cross_session_note": "..."}` (may be empty if ResearchAgent fails — always present, never absent). Both `interviews/routes.py:start_session` (sets `resume_based`) and `invites/routes.py:start_invite` (sets the invite's question_set type) write this shape.
 - `websocket.py` builds `resume_summary` whenever `session.resume` is present — **regardless of mode** (the mode-based gate was replaced with a presence-based gate). Predefined-mode invites never link a résumé so the agent stays generic; all other modes carry the same résumé end-to-end.
 - `SessionOrchestrator(mode=...)` validates against the four-value set; anything unknown falls back to `resume_based` for back-compat.
 - All AI/JD plan output passes through `_scrub_questions` in [question_sets.py](backend/app/invites/question_sets.py), which strips bracketed tokens like `[Company Name]` / `[Programming Language]` if they leak past the system-prompt rules.
@@ -66,6 +77,7 @@ Four modes coexist, each fully isolated at runtime. The mode is persisted on `se
 
 Concrete patterns that other code should follow when extending these subsystems — breaking these reintroduces fixed bugs.
 
+- **Invite window enforcement.** `validate_invite()` in `invites/service.py` checks `starts_at` before the expiry check. Any new flow that calls `validate_invite()` gets this check for free. Do NOT bypass `validate_invite()` or add a separate `start_invite` path — both `start_invite` and `participate_as_creator` already route through it.
 - **Concurrent-session guard.** Every endpoint that creates a `Session` (`interviews/routes.start_session`, `invites/routes.start_invite`, `invites/routes.participate_as_creator`) MUST first query for any `pending` / `in_progress` session for that user and return 409 if one exists. Otherwise the candidate can run two sessions simultaneously and corrupt the score history.
 - **Rate limiting.** Every cost-bearing route that talks to the LLM, an LLM-backed builder, or large-file storage carries an `@limiter.limit(...)` decorator (the `slowapi` Limiter is exported from `app.auth.routes`). Required `request: Request` first arg. New routes that call `get_llm_provider()` or generate question plans must add a limit too.
 - **Resume sanitization.** Anything that interpolates résumé content into an LLM prompt MUST go through `_sanitize_resume_text` (raw text) or `_sanitize_resume_obj` (parsed dict) in [agent.py](backend/app/interviews/agent.py). They strip C0/C1 control codes and Unicode line/paragraph separators and apply hard length caps (`MAX_RESUME_PROMPT_CHARS = 8000`, `MAX_RESUME_FIELD_CHARS = 1500`).

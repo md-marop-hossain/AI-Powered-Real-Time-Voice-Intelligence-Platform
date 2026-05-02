@@ -6,12 +6,12 @@ Pluggable provider: set TTS_PROVIDER to "elevenlabs" or "openai" in .env.
 from __future__ import annotations
 
 import asyncio
-import logging
+import structlog
 from collections.abc import AsyncIterator
 
 from app.core.config import settings
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger()
 
 
 async def stream_tts(text: str) -> AsyncIterator[bytes]:

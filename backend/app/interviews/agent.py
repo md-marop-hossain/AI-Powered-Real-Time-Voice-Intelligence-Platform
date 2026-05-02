@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
+import structlog
 import re
 
 from app.core.llm_provider import JSON_RESPONSE, get_llm_provider
@@ -38,7 +38,7 @@ _CONTROL_CHARS = re.compile(
     "[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F  ]"
 )
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger()
 
 
 def _sanitize_resume_text(text: str | None, max_chars: int = MAX_RESUME_PROMPT_CHARS) -> str:
@@ -156,25 +156,26 @@ async def generate_question_plan(
     seniority: str | None = None,
     focus: str | None = None,
     industry: str | None = None,
+    extra_context: str = "",
 ) -> list[dict]:
     provider = get_llm_provider()
+    user_content = INITIAL_QUESTIONS_USER_TEMPLATE.format(
+        role=role,
+        seniority_label=_seniority_label(seniority),
+        focus_label=_focus_label(focus),
+        industry_clause=_industry_clause(industry),
+        duration_minutes=duration_minutes,
+        resume_json=json.dumps(
+            _sanitize_resume_obj(parsed_resume),
+            ensure_ascii=False,
+        )[:MAX_RESUME_PROMPT_CHARS],
+    )
+    if extra_context:
+        user_content += extra_context
     raw = await provider.chat(
         messages=[
             {"role": "system", "content": INITIAL_QUESTIONS_SYSTEM},
-            {
-                "role": "user",
-                "content": INITIAL_QUESTIONS_USER_TEMPLATE.format(
-                    role=role,
-                    seniority_label=_seniority_label(seniority),
-                    focus_label=_focus_label(focus),
-                    industry_clause=_industry_clause(industry),
-                    duration_minutes=duration_minutes,
-                    resume_json=json.dumps(
-                        _sanitize_resume_obj(parsed_resume),
-                        ensure_ascii=False,
-                    )[:MAX_RESUME_PROMPT_CHARS],
-                ),
-            },
+            {"role": "user", "content": user_content},
         ],
         response_format=JSON_RESPONSE,
         temperature=0.4,

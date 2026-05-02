@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import logging
+import structlog
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -18,7 +18,7 @@ from app.models.interview_invite import (
 )
 from app.models.session import Session
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger()
 
 
 def generate_invite_token() -> str:
@@ -50,10 +50,20 @@ def validate_invite(invite: InterviewInvite | None) -> InterviewInvite:
         raise InviteValidationError("not_found", "Invite link is invalid.")
     if invite.status == InviteStatus.revoked:
         raise InviteValidationError("revoked", "This invite has been revoked.")
+    now = datetime.now(timezone.utc)
+    if invite.starts_at is not None:
+        starts_at = invite.starts_at
+        if starts_at.tzinfo is None:
+            starts_at = starts_at.replace(tzinfo=timezone.utc)
+        if now < starts_at:
+            raise InviteValidationError(
+                "not_open",
+                f"This interview window opens at {starts_at.strftime('%Y-%m-%d %H:%M UTC')}.",
+            )
     expires_at = invite.expires_at
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at <= datetime.now(timezone.utc):
+    if expires_at <= now:
         raise InviteValidationError("expired", "This invite has expired.")
     if invite.attempts_used >= invite.max_attempts:
         raise InviteValidationError(

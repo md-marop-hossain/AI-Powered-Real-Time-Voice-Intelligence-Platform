@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
 
+import sentry_sdk
+import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
@@ -7,6 +9,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.auth.routes import limiter, router as auth_router
 from app.core.config import settings
+from app.core.logging import configure_logging
 from app.core.storage import ensure_bucket
 from app.interviews.routes import router as sessions_router
 from app.interviews.websocket import router as ws_router
@@ -16,14 +19,25 @@ from app.resumes.routes import router as resumes_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    json_logs = settings.ENV != "development"
+    configure_logging(log_level=settings.LOG_LEVEL, json_logs=json_logs)
+    log = structlog.get_logger("app.startup")
+
     # Hard-fail in non-dev environments if JWT_SECRET is left as a placeholder.
-    # In development this just warns; tests and local dev keep working.
     settings.assert_jwt_secret_is_safe()
+
+    if settings.SENTRY_DSN:
+        sentry_sdk.init(
+            dsn=settings.SENTRY_DSN,
+            environment=settings.ENV,
+            traces_sample_rate=0.1,
+        )
+        log.info("sentry_initialized", dsn_present=True)
+
     try:
         ensure_bucket()
     except Exception as e:
-        # MinIO may not be reachable during local "uvicorn --reload" boot — log only.
-        print(f"[warn] Could not ensure S3 bucket on startup: {e}")
+        log.warning("bucket_ensure_failed", error=str(e))
     yield
 
 

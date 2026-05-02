@@ -18,18 +18,26 @@ A full-stack web application where a candidate uploads their résumé and an AI 
 2. [Quick Start](#quick-start)
 3. [Detailed Setup](#detailed-setup)
 4. [Environment Variables — Full Reference](#environment-variables--full-reference)
-5. [Architecture](#architecture)
-6. [Interview Modes](#interview-modes)
-7. [API Reference](#api-reference)
-8. [Auth Flow](#auth-flow)
-9. [Invitation System](#invitation-system)
-10. [Tests](#tests)
-11. [Troubleshooting](#troubleshooting)
-12. [Known Bugs & Issues](#known-bugs--issues)
-13. [Improvement Roadmap](#improvement-roadmap)
-14. [Strategic Roadmap — Path to Market-Ready SaaS](#strategic-roadmap--path-to-market-ready-saas)
-15. [Security Notes](#security-notes)
-16. [Production Readiness Checklist](#production-readiness-checklist)
+5. [How It Works](#how-it-works)
+6. [Architecture](#architecture)
+   - [Real-time voice loop](#real-time-voice-loop)
+   - [Multi-agent coordination](#multi-agent-coordination)
+   - [Session state machine](#session-state-machine)
+   - [Database schema overview](#database-schema-overview)
+   - [Repository layout](#repository-layout)
+7. [WebSocket Protocol Reference](#websocket-protocol-reference)
+8. [Scoring System](#scoring-system)
+9. [Interview Modes](#interview-modes)
+10. [API Reference](#api-reference)
+11. [Auth Flow](#auth-flow)
+12. [Invitation System](#invitation-system)
+13. [Tests](#tests)
+14. [Troubleshooting](#troubleshooting)
+15. [Known Bugs & Issues](#known-bugs--issues)
+16. [Improvement Roadmap](#improvement-roadmap)
+17. [Strategic Roadmap — Path to Market-Ready SaaS](#strategic-roadmap--path-to-market-ready-saas)
+18. [Security Notes](#security-notes)
+19. [Production Readiness Checklist](#production-readiness-checklist)
 
 ---
 
@@ -234,6 +242,8 @@ All variables live in `backend/.env` (backend) and `frontend/.env` (frontend). N
 | `CORS_ORIGINS` | `http://localhost:5173` | Yes | Comma-separated allowed origins |
 | `INVITE_EXPIRY_HOURS` | `24` | No | Default invite validity |
 | `INVITE_MAX_ATTEMPTS` | `1` | No | Default max candidate attempts per invite |
+| `SENTRY_DSN` | _(empty)_ | No | Sentry DSN — error tracking disabled when empty |
+| `LOG_LEVEL` | `INFO` | No | Root log level (`DEBUG` / `INFO` / `WARNING` / `ERROR`) |
 
 ### Frontend
 
@@ -242,6 +252,75 @@ All variables live in `backend/.env` (backend) and `frontend/.env` (frontend). N
 | `VITE_API_URL` | Backend HTTP base URL (`http://localhost:8000`) |
 | `VITE_WS_URL` | Backend WebSocket base URL (`ws://localhost:8000`) |
 | `VITE_GOOGLE_CLIENT_ID` | Google OAuth client ID |
+| `VITE_SENTRY_DSN` | Sentry DSN — frontend error tracking disabled when empty |
+
+---
+
+## How It Works
+
+### Self-service candidate flow
+
+```
+1. Register (email+OTP or Google OAuth) → email verified → dashboard
+2. Upload résumé (PDF / DOCX / TXT, ≤ 10 MB)
+     → pypdf / python-docx parses text
+     → pgvector stores 768-dim embedding
+     → MinIO stores the original file
+3. "New Interview" → select role, seniority, focus, industry, duration
+4. POST /sessions
+     → ResearchAgent: queries past sessions with skill_coverage
+          → surfaces skill IDs with avg score < 5.0 as weak_areas
+     → PlannerAgent: generates 6–10 questions via LLM
+          → injects weak_areas as priority probe hints
+          → Session row created (questions_plan includes research_hints)
+5. WebSocket /ws/interview/{session_id}?token=JWT
+     → Deepgram STT starts (streaming, utterance-end triggered)
+     → First question TTS plays
+6. Per turn:
+     a. Candidate speaks → Deepgram emits final transcript
+     b. EvaluatorAgent + decide_next_turn run in parallel (asyncio.gather)
+     c. VerifierAgent fires as fire-and-forget background task
+     d. Decision: nudge | ask_followup | next_question | end_section
+     e. Difficulty updated (±0.5, clamped [1, 10])
+     f. Next question text calibrated for current difficulty
+     g. TTS plays next line
+7. Session ends (plan exhausted / timer / candidate says "stop" / focus violations)
+8. _generate_report_background (fire-and-forget):
+     → FeedbackAgent writes coaching narrative
+     → render_pdf in ThreadPoolExecutor → MinIO upload
+     → Report row persisted → creator email notification (if invited)
+9. GET /sessions/{id}/report
+     → summary + PDF URL returned
+     → per-turn audio_key re-signed into fresh presigned audio_url
+```
+
+### Invitation flow
+
+**Creator:**
+```
+1. CreateInvitePage → emails, role, duration, mode, etc.
+   For ai_generated / jd_based:
+     → drag-drop candidate résumé → POST /resumes → resume_id
+2. POST /invites
+     → question plan generated (LLM or verbatim list)
+     → one InterviewInvite + one invitee row per email address
+     → branded emails dispatched
+3. InvitesDashboardPage:
+     → ACTIVE / EXPIRED / USED badge per row + completion ratio
+     → COPY button → clipboard-copies invite_url
+     → PARTICIPATE → creator self-test (no attempt consumed)
+     → row click → /invites/{id}/results → per-candidate scores + report links
+```
+
+**Candidate:**
+```
+1. Email link → /invite/{token} → invite details
+   OR dashboard "Pending Invitations" section → JOIN →
+2. Sign in (email must match invitee.email — server enforces 403 on mismatch)
+3. POST /invites/{token}/start → session created from stored question plan
+4. Interview proceeds → completion decrements attempts_used
+5. Creator receives email: overall score + results URL
+```
 
 ---
 
@@ -250,23 +329,219 @@ All variables live in `backend/.env` (backend) and `frontend/.env` (frontend). N
 ### Real-time voice loop
 
 ```
-Browser mic (getUserMedia)
-  → 16 kHz PCM chunks (ScriptProcessorNode)
-  → WebSocket /ws/interview/{session_id}?token=JWT
-  → FastAPI websocket.py
-      → Deepgram streaming STT
-          → on final transcript
-              → SessionOrchestrator.submit_answer()
-                  → LLM (decide_next_turn, JSON mode)
-                  → Turn persisted + scored
-                  → returns action: next_question | ask_followup | nudge | end_section
-              → next question text
-      → TTS provider (ElevenLabs / OpenAI)
-          → MP3 audio chunks pushed back over WS
-  → useAudioPlayer queues + plays back
+Browser mic  (AudioWorkletNode — 16 kHz PCM Int16LE, audio thread)
+  │  fallback: ScriptProcessorNode (main thread)
+  ▼
+WebSocket /ws/interview/{session_id}?token=JWT
+  ├─ binary frames ──► Deepgram streaming STT
+  │                      ├─ on_interim  ──► {"type":"user_interim"}
+  │                      ├─ on_final    ──► {"type":"transcript"} + pending queue
+  │                      ├─ speech_start──► {"type":"user_speech_started"}
+  │                      └─ utter_end   ──► {"type":"user_speech_ended"}
+  │
+  ├─ PCM duplicated into per-turn bytearray (cap ~12 MB)
+  │    → on turn boundary: _save_turn_audio (background task)
+  │      → WAV encode → MinIO upload → Turn.audio_key
+  │
+  └─ consume_transcripts() task
+       ├─ {"type":"ai_thinking"}
+       │
+       ├─ SessionOrchestrator.submit_answer(transcript)
+       │    ├─ asyncio.gather(return_exceptions=True)
+       │    │    ├─ EvaluatorAgent (30s timeout)
+       │    │    │    ├─ deterministic: confidence (filler ratio + length)
+       │    │    │    │                 keyword_coverage (skill graph)
+       │    │    │    └─ LLM: technical_depth, problem_solving,
+       │    │    │              communication, structure, consistency
+       │    │    │    └─► EvalResult(scores, rationale, skill_tags)
+       │    │    │
+       │    │    └─ decide_next_turn (30s timeout)
+       │    │         └─► {decision, next_text, rationale}
+       │    │
+       │    ├─ Turn.scores = eval_result.scores (7-dim)
+       │    ├─ Turn.skill_tags, difficulty_level saved
+       │    ├─ difficulty ±0.5, clamped [1, 10]
+       │    └─ next Q: calibrate_question_text(q, difficulty)
+       │
+       ├─ speak(next_text)
+       │    ├─ {"type":"ai_question", q_index, q_total}
+       │    │    OR {"type":"ai_nudge"}
+       │    ├─ TTS stream → binary MP3 chunks
+       │    └─ {"type":"ai_audio_end"}
+       │
+       ├─ VerifierAgent  ←── asyncio.create_task (fire-and-forget)
+       │    → own AsyncSessionLocal
+       │    → re-scores 5 LLM dims independently
+       │    → Turn.verified_scores, Turn.verifier_flags
+       │
+       └─ {"type":"time_remaining", seconds}
+
+Session end
+  ├─ _update_session_skill_coverage()
+  │    → Session.skill_coverage {skill_id: avg_score}
+  │    → Session.difficulty_curve [float list]
+  └─ _generate_report_background() ←── asyncio.create_task
+       ├─ FeedbackAgent → FeedbackNarrative
+       ├─ build_report_summary(session, narrative)
+       ├─ render_pdf() in ThreadPoolExecutor → MinIO
+       ├─ Report row persisted
+       └─ _notify_creator_of_completion() (best-effort SMTP)
 ```
 
-Latency target: ≤ 1.5 s p95 from end of user speech to start of AI speech.
+Latency target: ≤ 1.5 s p95 from end-of-utterance to first TTS byte.
+
+### Multi-agent coordination
+
+**Session start (POST /sessions):**
+
+```
+load_skill_graph(role)          ← lru_cache, JSON from skill_graphs/
+     ↓
+ResearchAgent (timeout 30s)
+  SELECT sessions WHERE user_id AND skill_coverage IS NOT NULL
+  ORDER BY created_at DESC LIMIT 3
+  → aggregate weak skill IDs (avg score across sessions < 5.0)
+  → LLM call → ResearchHints {weak_areas, probe_topics, cross_session_note}
+  ↓ (fallback: ResearchHints() empty on any exception)
+PlannerAgent
+  → hint_clause = "Priority probe areas: {weak_areas}. Weight toward these."
+  → generate_question_plan(extra_context=hint_clause)
+  → returns list[{index, section, question}]
+     ↓
+Session.questions_plan = {
+  "questions": [...],
+  "mode": "resume_based",
+  "research_hints": {"weak_areas": [...], "cross_session_note": "..."}
+}
+```
+
+**Per turn (WebSocket, non-nudge):**
+
+```
+asyncio.gather:
+  EvaluatorAgent → EvalResult
+    confidence  = (1 − filler_ratio × 1.5) × 7 + min(words/40, 1) × 3
+    kw_coverage = matched_skill_keywords / total_skills × 10
+    LLM → technical_depth, problem_solving, communication, structure, consistency
+    → skill_tags = [skill IDs whose keywords appear in answer]
+
+  decide_next_turn → {decision, next_text, rationale}
+
+merge:
+  Turn.scores    = eval_result.scores          (7-dim replaces 4-dim)
+  Turn.skill_tags = eval_result.skill_tags
+  Turn.rationale  = eval_result.rationale
+  Turn.difficulty_level = _current_difficulty
+
+  avg = mean(all 7 dims)
+  _current_difficulty += 0.5 if avg ≥ 7 else (-0.5 if avg ≤ 4 else 0)
+  _current_difficulty  = clamp(_current_difficulty, 1.0, 10.0)
+  _difficulty_curve.append(_current_difficulty)
+
+if decision == next_question:
+  next_q_text = calibrate_question_text(plan[idx]["question"], difficulty)
+    difficulty < 3 → append "(Feel free to start from what you know…)"
+    difficulty > 7 → append "(No scaffolding — production-level answer.)"
+    else           → unchanged
+```
+
+**After speak() (fire-and-forget):**
+
+```
+VerifierAgent (asyncio.create_task):
+  async with AsyncSessionLocal() as db:
+    LLM re-scores technical_depth, problem_solving, communication,
+             structure, consistency  (independently, different prompt)
+    flags = [dim for dim where |original - verified| > 1.5]
+    UPDATE turns SET verified_scores=…, verifier_flags=… WHERE id=turn_id
+```
+
+**Session end:**
+
+```
+_update_session_skill_coverage():
+  for skill in skill_graph.skills:
+    scores = [(t.technical_depth + t.problem_solving)/2
+              for t in turns if skill.id in t.skill_tags]
+    skill_coverage[skill.id] = mean(scores) if scores else 0.0
+  session.skill_coverage = skill_coverage
+  session.difficulty_curve = _difficulty_curve
+
+FeedbackAgent:
+  skill_coverage_summary (Python, no LLM)
+  → LLM: executive_summary, strong_skills, weak_skills, recommendations
+  → FeedbackNarrative (fallback: empty on exception)
+```
+
+### Session state machine
+
+```
+  ┌──────────┐   POST /sessions        ┌─────────────┐
+  │          │ ──────────────────────► │   PENDING   │
+  │  (start) │                         └──────┬──────┘
+  └──────────┘                                │ WS connects
+                                              │ orch.start() / restore / recover
+                                              ▼
+                                       ┌─────────────┐
+                                       │ IN_PROGRESS │ ◄─── Redis state saved
+                                       └──────┬──────┘      every turn (3h TTL)
+                                              │
+                         ┌────────────────────┼────────────────────┐
+                         │                    │                    │
+                    plan exhausted      timer reaches 0      focus_violations ≥ 3
+                    force_end()         auto-end             end_section
+                    "stop interview"
+                         │                    │                    │
+                         └────────────────────▼────────────────────┘
+                                       ┌─────────────┐
+                                       │  COMPLETED  │ (terminal)
+                                       └─────────────┘
+                                             │
+                              _generate_report_background()
+                                             │
+                                       ┌─────────────┐
+                                       │   Report    │ → PDF → MinIO
+                                       └─────────────┘
+```
+
+**Reconnect logic (ordered):**
+
+1. Load Redis key `interview:{session_id}:state` → if present and `ended=false` → `restore_state()` → send `{"type": "resumed"}`
+2. Redis miss but `session.status == in_progress` → `recover_from_db()` (rebuild from persisted `Turn` rows) → send `{"type": "resumed"}`
+3. Otherwise → fresh `orch.start()` (new interview)
+
+**Redis state payload** (`interview:{session_id}:state`, TTL 3h):
+
+```json
+{
+  "plan_idx": 2,
+  "nudges_on_current_turn": 1,
+  "followups_on_current_question": 0,
+  "history": [...],
+  "current_question": "...",
+  "time_remaining_seconds": 1240,
+  "started_at": "...",
+  "current_difficulty": 6.0,
+  "difficulty_curve": [5.0, 5.5, 6.0],
+  "focus_violations": 0,
+  "ended": false
+}
+```
+
+### Database schema overview
+
+| Table | Key columns | Purpose |
+|---|---|---|
+| `users` | `id`, `email`, `password_hash`, `google_sub`, `email_verified`, `otp_hash` | Auth — email+password or Google OAuth |
+| `resumes` | `id`, `user_id`, `parsed` (JSONB), `embedding` (vector 768), `storage_key` | Parsed résumé + pgvector embedding + MinIO key |
+| `sessions` | `id`, `user_id`, `resume_id`, `invite_id`, `status`, `questions_plan` (JSONB), `final_scores` (JSONB), `difficulty_curve` (JSONB), `skill_coverage` (JSONB), `focus_violations` | Per-interview state, plan, and aggregated results |
+| `turns` | `id`, `session_id`, `index`, `question_kind`, `question`, `answer`, `scores` (JSONB 7-dim), `skill_tags` (JSONB), `difficulty_level`, `verified_scores` (JSONB), `verifier_flags` (JSONB), `audio_key` | Per-question record with all scoring metadata |
+| `reports` | `id`, `session_id`, `overall_score`, `summary` (JSONB), `pdf_key` | Final report; `summary` includes narrative + skill coverage |
+| `question_sets` | `id`, `mode`, `questions` (JSONB), `resume_id` | Invite question plan (predefined / AI / JD) |
+| `interview_invites` | `id`, `creator_id`, `question_set_id`, `token`, `expires_at`, `max_attempts`, `revoked` | Per-invite tokenized link + lifecycle |
+| `invitees` | `id`, `invite_id`, `email`, `attempts_used`, `completed_session_id` | Per-candidate tracking within an invite |
+
+Migrations: `0001` (base schema) → `0005` (invitations) → `0006` (QuestionSet resume_id) → `0007` (Phase 1 AI layer — `turns.{difficulty_level, skill_tags, verified_scores, verifier_flags}` + `sessions.{difficulty_curve, skill_coverage}`).
 
 ### Repository layout
 
@@ -288,20 +563,163 @@ Latency target: ≤ 1.5 s p95 from end of user speech to start of AI speech.
 │       └── styles/           # tokens.css (CSS custom properties)
 ├── backend/
 │   └── app/
+│       ├── agents/           # Phase 1 agent fleet: base, planner, researcher,
+│       │                     # question, evaluator, verifier, feedback
+│       ├── skill_graphs/     # Per-role JSON skill graphs + load_skill_graph() loader
 │       ├── core/             # config, security (bcrypt+JWT), db, llm_provider, email
 │       ├── auth/             # register, verify-email, resend-otp, login,
 │       │                     # google, refresh, forgot/reset password, account
 │       ├── resumes/          # upload, parsing (pypdf/python-docx), pgvector embeddings
 │       ├── interviews/       # agent, orchestrator, STT/TTS, WebSocket handler, routes
 │       ├── invites/          # invitation system: question_sets builders, routes, service
-│       ├── scoring/          # rubric aggregation (clarity, depth, structure, relevance)
-│       ├── reports/          # WeasyPrint PDF generation (synchronous — see Known Bugs)
+│       ├── scoring/          # rubric aggregation — v1 (4-dim) + v2 (7-dim) schema-aware
+│       ├── reports/          # WeasyPrint PDF generation + coaching narrative section
 │       ├── models/           # SQLAlchemy ORM models
 │       ├── schemas/          # Pydantic request/response models
 │       └── workers/          # Celery task definitions (resume parsing offload)
-├── alembic/versions/         # Migrations 0001–0005
+├── alembic/versions/         # Migrations 0001–0007
 └── docker-compose.yml
 ```
+
+---
+
+## WebSocket Protocol Reference
+
+The WebSocket endpoint is `/ws/interview/{session_id}?token=<JWT access token>`. Binary frames carry audio; text frames carry JSON control messages.
+
+### Server → Client messages
+
+| `type` | Extra fields | Description |
+|---|---|---|
+| `ai_question` | `text`, `q_index` (1-based), `q_total` | New primary question. TTS binary stream follows immediately. |
+| `ai_nudge` | `text` | Soft continuation prompt ("Go on.", "Take your time."). TTS binary stream follows. Does NOT create a new turn. |
+| *(binary)* | raw MP3 bytes | Streamed TTS audio. Arrives between an `ai_question`/`ai_nudge` header and the `ai_audio_end` footer. |
+| `ai_audio_end` | — | Marks the end of one TTS segment. Client may start rendering the "listening" state. |
+| `transcript` | `text` | Committed utterance from Deepgram (UtteranceEnd). Client appends to the current turn's answer display. |
+| `user_interim` | `text` | In-progress STT result. Client shows a live "typing" preview. |
+| `user_speech_started` | — | Deepgram VAD detected speech onset. |
+| `user_speech_ended` | — | Deepgram UtteranceEnd fired. |
+| `ai_thinking` | — | LLM call in-flight. Client shows "Considering your answer…" |
+| `ai_idle` | — | LLM call failed (recoverable). Client clears spinner; an `error` follows. |
+| `time_remaining` | `seconds` | Updated after every turn. Client syncs countdown timer. |
+| `session_ended` | `reason`? (`"focus_violations"`) | Interview complete. Client navigates to /complete. |
+| `focus_violation_ack` | `count`, `limit`, `reason` | Server acknowledged a focus event. Client shows warning badge. |
+| `error` | `message` | Non-fatal error (toast). Consumer loop continues. |
+| `resumed` | — | Reconnection: Redis state restored successfully. |
+| `ping` | — | Keepalive frame sent every 30 s to defeat LB idle timeouts. |
+
+### Client → Server messages
+
+| Content | Description |
+|---|---|
+| binary (PCM Int16LE 16 kHz mono) | Continuous mic audio — every `AudioWorkletNode` frame forwarded as-is. Server duplicates into per-turn buffer AND feeds Deepgram. |
+| `{"type": "end_session"}` | Candidate explicitly ends the interview. Server calls `force_end()` and emits `session_ended`. |
+| `{"type": "end_speech"}` | Manual VAD hint. Deepgram usually handles this; kept for edge cases. |
+| `{"type": "focus_violation", "reason": "tab_switch"\|"fullscreen_exit"\|"window_blur"}` | Integrity event from frontend. Server records on session, returns `focus_violation_ack`. 3 violations end the session. |
+| `{"type": "pong"}` | Optional keepalive ack. Accepted as no-op so symmetric clients don't appear malformed. |
+
+### Turn lifecycle over the wire
+
+```
+server: {"type":"ai_question","text":"Tell me about...","q_index":1,"q_total":8}
+server: <binary MP3 chunk 1>
+server: <binary MP3 chunk 2>
+...
+server: {"type":"ai_audio_end"}
+client: <binary PCM frames — continuous>
+server: {"type":"user_speech_started"}
+server: {"type":"user_interim","text":"I worked on..."}
+server: {"type":"user_speech_ended"}
+server: {"type":"transcript","text":"I worked on a distributed cache at my last company."}
+server: {"type":"ai_thinking"}
+server: {"type":"ai_question","text":"How did you handle cache invalidation?","q_index":1,"q_total":8}
+server: <binary MP3...>
+server: {"type":"ai_audio_end"}
+server: {"type":"time_remaining","seconds":1204}
+```
+
+---
+
+## Scoring System
+
+### 7-dimension rubric (v2 schema — Phase 1)
+
+Detected by presence of `"technical_depth"` in `Turn.scores`. New sessions always produce v2.
+
+| Dimension | Source | How calculated |
+|---|---|---|
+| `technical_depth` | LLM | Depth and precision of technical knowledge demonstrated |
+| `problem_solving` | LLM | Quality of analytical reasoning, approach, trade-offs |
+| `communication` | LLM | Clarity, conciseness, audience-awareness |
+| `structure` | LLM | STAR / BAR format adherence, logical progression |
+| `consistency` | LLM | Coherence with prior answers in the same session |
+| `confidence` | Deterministic | `(1.0 − filler_ratio × 1.5) × 7.0 + min(word_count / 40, 1.0) × 3.0` — penalises filler words ("uh", "um", "like", …), rewards length up to ~40 words |
+| `keyword_coverage` | Deterministic | `matched_skill_keywords / total_skills × 10.0` — intersection of answer text with the role's skill graph keyword lists |
+
+**Aggregation:**
+
+```
+llm_avg  = mean(technical_depth, problem_solving, communication, structure, consistency)
+det_avg  = mean(confidence, keyword_coverage)
+overall  = round(llm_avg × 0.8 + det_avg × 0.2, 2)
+```
+
+### 4-dimension rubric (v1 schema — backward compat)
+
+Pre-Phase-1 sessions have `clarity`, `depth`, `correctness`, `communication`. Detected by absence of `"technical_depth"`.
+
+```
+overall = mean(clarity, depth, correctness, communication)  [equal weight]
+```
+
+`schema_version: "v1"/"v2"` is included in all report summaries. Old sessions always hit the v1 path unchanged.
+
+### Adaptive difficulty
+
+Each session starts at difficulty `5.0`. After every scored (non-nudge) turn:
+
+```
+avg_score = mean(all 7 dimensions)
+if avg_score ≥ 7.0:  difficulty += 0.5
+if avg_score ≤ 4.0:  difficulty -= 0.5
+difficulty = clamp(difficulty, 1.0, 10.0)
+```
+
+The trajectory is persisted in `Session.difficulty_curve` (list of floats, one per scored turn) and surfaced in the report summary. An interview that ramps from 5.0 to 8.5 and holds there signals a strong candidate who should have been tested harder.
+
+**Question text calibration (`QuestionAgent.calibrate_question_text`):**
+
+| Difficulty | Text appended |
+|---|---|
+| < 3.0 | `" (Feel free to start from what you know — no need for a complete answer.)"` |
+| 3.0 – 7.0 | Unchanged |
+| > 7.0 | `" (No scaffolding — please give a complete, production-level answer.)"` |
+
+### Score verification (VerifierAgent)
+
+After every non-nudge turn, a fire-and-forget task independently re-scores the 5 LLM dimensions using a separate prompt. Results stored in:
+
+- `Turn.verified_scores` — independent 7-dim dict (deterministic dims copied from original)
+- `Turn.verifier_flags` — list of dimension names where `|original − verified| > 1.5`
+
+Flagged turns are visible in the raw DB and form the foundation for future human-review routing (Phase 6).
+
+### Skill graph keyword coverage
+
+Keyword matching uses the role's JSON skill graph. Each skill node has `keywords: list[str]`; a skill is "matched" if any keyword appears (case-insensitive substring) in the answer text.
+
+**Available skill graphs:**
+
+| File | Role slug | Skills |
+|---|---|---|
+| `backend_engineer.json` | `backend_engineer` | distributed_systems, database_design, api_design, caching, async_concurrency, system_design, testing, security, observability, data_structures_algorithms |
+| `frontend_engineer.json` | `frontend_engineer` | react_ecosystem, javascript_typescript, css_layout, performance_optimization, state_management, testing, accessibility, build_tooling, browser_apis |
+| `data_scientist.json` | `data_scientist` | machine_learning, statistics, python_data_stack, data_engineering, deep_learning, model_evaluation, feature_engineering, data_visualization |
+| `product_manager.json` | `product_manager` | product_strategy, user_research, data_driven_decisions, roadmap_planning, stakeholder_management, agile_scrum, go_to_market, metrics_kpis |
+| `engineering_manager.json` | `engineering_manager` | technical_leadership, people_management, hiring_onboarding, project_delivery, system_architecture, cross_functional_collaboration, incident_management, org_design |
+| `default.json` | *(fallback)* | communication, problem_solving, technical_knowledge, critical_thinking, system_thinking |
+
+`load_skill_graph(role_string)` normalises the role to a slug, tries an exact file match, then falls back to `default.json`. Returns `None` only if even `default.json` is absent.
 
 ---
 
@@ -460,13 +878,16 @@ cd frontend && npx playwright install && npm run test:e2e
 
 | Area | Status |
 |---|---|
-| Scoring aggregation | 2 tests ✓ |
+| Scoring aggregation — v1 + v2 schema detection | 7 tests ✓ |
 | JWT / bcrypt security | 4 tests ✓ |
 | JWT secret startup safety | 9 tests ✓ |
 | Résumé prompt-injection sanitizer | 12 tests ✓ |
 | Invite service (token / expiry / lifecycle) | 11 tests ✓ |
 | Orchestrator helpers (stop-intent, short-answer guard, caps) | 23 tests ✓ |
 | Question-set placeholder scrubber | 8 tests ✓ |
+| EvaluatorAgent — confidence + keyword_coverage helpers | 8 tests ✓ |
+| Adaptive difficulty curve math + clamping | 7 tests ✓ |
+| Skill graph loader (JSON schema, role resolution, fallback) | 7 tests ✓ |
 | Auth routes | ✗ Not tested |
 | Session routes | ✗ Not tested |
 | Invite routes | ✗ Not tested |
@@ -476,7 +897,7 @@ cd frontend && npx playwright install && npm run test:e2e
 | Frontend components | ✗ Not tested |
 | E2E interview flow | ✗ Not tested |
 
-**Total: 69 tests passing.** Pure-unit coverage is now solid; route / WS integration coverage is still pending — see [Improvement Roadmap](#improvement-roadmap) item 17.
+**Total: 96 tests passing.** Pure-unit coverage is solid across all Phase 1 agent helpers; route / WS integration coverage is still pending — see [Improvement Roadmap](#improvement-roadmap) item 17.
 
 ---
 
@@ -743,7 +1164,7 @@ Ordered by impact-to-effort ratio.
 | 2 | ~~**Resend invite email**~~ ✅ | ~~`POST /invites/{id}/resend` — regenerate token, reset expiry, re-fire email.~~ Done — see `resend_invite` in `invites/routes.py`. |
 | 3 | ~~**Creator notification on completion**~~ ✅ | ~~Email creator when a candidate finishes.~~ Done — fires from the post-completion background task; idempotent across WS+HTTP completion paths. |
 | 4 | ~~**Question progress indicator**~~ ✅ | ~~Show "Q{n} of {total}" in predefined mode.~~ Done — backend stamps `q_index` / `q_total` on every `ai_question` WS frame; `QuestionCard` renders `{n} OF {total}` next to the `Q{n}` marker (stable across follow-ups since they keep the same primary index). |
-| 5 | ~~**Error Boundary + Sentry**~~ ⚠️ Partial | ~~Prevents blank white screen on JS errors.~~ Error Boundary done (`frontend/src/components/ErrorBoundary.tsx`); Sentry wiring still pending. |
+| 5 | ~~**Error Boundary + Sentry**~~ ✅ | ~~Prevents blank white screen on JS errors.~~ Done — Error Boundary in `frontend/src/components/ErrorBoundary.tsx`; `@sentry/react` wired in `main.tsx` (opt-in via `VITE_SENTRY_DSN`); backend `sentry-sdk[fastapi]` initialized in lifespan (opt-in via `SENTRY_DSN`). |
 | 6 | ~~**Async report generation**~~ ✅ | ~~Move WeasyPrint out of the HTTP handler into a background task.~~ Done — `run_in_executor` + WS fire-and-forget background task. |
 | 7 | ~~**Concurrent session guard**~~ ✅ | ~~Single DB query before `POST /sessions`.~~ Done — 409 guard on all three session-creation endpoints. |
 | 8 | ~~**Startup check for `JWT_SECRET`**~~ ✅ | ~~One-line assert in `config.py`.~~ Done — `Settings.assert_jwt_secret_is_safe()` runs in lifespan; blocks `ENV != development` boots with placeholder secrets. |
@@ -768,14 +1189,14 @@ Ordered by impact-to-effort ratio.
 |---|---|---|
 | 18 | **Question set library** | Save and reuse `QuestionSet` rows across invites. `QuestionSet` model exists — add a name field and library UI. |
 | 19 | ~~**Candidate audio replay**~~ ✅ | ~~Store mic audio chunks in MinIO per turn; surface playback on report page.~~ Done — WS handler buffers PCM per turn, encodes WAV, uploads to MinIO; report endpoint presigns `audio_url` per turn. |
-| 20 | **Scheduled / future-dated invites** | Add `starts_at` to `InterviewInvite`; enforce at `/start`. Useful for assessment windows. |
+| 20 | ~~**Scheduled / future-dated invites**~~ ✅ | ~~Add `starts_at` to `InterviewInvite`; enforce at `/start`. Useful for assessment windows.~~ Done — nullable `starts_at` column added (migration 0008); `validate_invite()` returns 410 with human-readable time if window not yet open; `CreateInvitePage` has a datetime-local picker for scheduling. |
 | 21 | **Team / organization accounts** | `Organization` model + `org_id` FK on invites. Multiple interviewers under one org. |
 | 22 | **Webhook on interview completion** | `POST /webhooks` registration; fire signed payload to creator's URL on session end. Enables ATS integration. |
 | 23 | **Completion email with PDF report** | Attach the generated PDF to the completion email sent to the candidate. |
 | 24 | **Multi-language support** | Deepgram supports 30+ languages; surface a language selector on the invite creation form. |
 | 25 | **CDN for MinIO assets** | Put CloudFront (or equivalent) in front of MinIO; use short-lived presigned URLs on private résumés. |
-| 26 | **Bulk invite via CSV** | Let creators upload a CSV of emails instead of typing them one by one. |
-| 27 | **Structured logging + error tracking** | Replace plain `logging` with `structlog` (JSON output) + Sentry on both frontend and backend. |
+| 26 | ~~**Bulk invite via CSV**~~ ✅ | ~~Let creators upload a CSV of emails instead of typing them one by one.~~ Done — "Import from CSV" button on `CreateInvitePage` parses the first column as email addresses and merges them into the recipients textarea; header row auto-detected and skipped. |
+| 27 | ~~**Structured logging + error tracking**~~ ✅ | ~~Replace plain `logging` with `structlog` (JSON output) + Sentry on both frontend and backend.~~ Done — `structlog` with stdlib bridge; JSON output in staging/prod, coloured console in development; `sentry-sdk[fastapi]` on backend + `@sentry/react` on frontend; both opt-in via env vars (`SENTRY_DSN` / `VITE_SENTRY_DSN`). |
 
 ---
 
@@ -793,7 +1214,7 @@ A frank look at where the codebase sits today vs. where a production agentic-AI 
 |---|---|---|
 | **User / Client** | React app with candidate + creator flows | Multi-tenant org/team UI, white-label theming, embeddable widget for career pages |
 | **Orchestration** | Single `SessionOrchestrator` (per-session FSM) | Multi-agent control plane: planner, router, scheduler, policy enforcer |
-| **Agents** | One `agent.py` (a single LLM call per turn) | Specialized agents — Research, Question, Evaluation, Feedback, Verifier |
+| **Agents** | ~~One `agent.py` (a single LLM call per turn)~~ ✅ 6-agent fleet in `app/agents/` | ~~Specialized agents — Research, Question, Evaluation, Feedback, Verifier~~ **Shipped** — parallel async dispatch, 7-dim scoring, adaptive difficulty, skill graphs, cross-session memory, VerifierAgent, FeedbackAgent |
 | **Tools & Integrations** | Internal-only HTTP/WebSocket | Public REST + Webhook API, ATS connectors, calendar, Slack/Teams |
 | **Memory** | Per-turn DB rows + 3-hour Redis state | Short / long / episodic memory layers; cross-session vector recall; org-level memory |
 | **Monitoring** | Plain `logging` + uvicorn output | OpenTelemetry traces, LLM-call observability, anomaly detection, eval suites |
@@ -805,84 +1226,61 @@ The diagonal pattern is intentional — it's normal for a strong prototype. The 
 
 ---
 
-### Phase 1 — AI Intelligence Layer (the depth gap)
+### ~~Phase 1 — AI Intelligence Layer (the depth gap)~~ ✅ Complete
 
-**This is the differentiation layer.** The dozen me-too AI interview tools on the market all do "single LLM call per turn" — that's a commodity. The IP lives in this phase. *(Largely the user's framing, expanded.)*
+**This was the differentiation layer.** All six sub-items are now shipped. *(Details below for reference.)*
 
-#### 1.1 True multi-agent system
+#### ~~1.1 True multi-agent system~~ ✅
 
-Replace the monolithic `agent.decide_next_turn()` call with a small fleet of specialized agents orchestrated by a Planner:
+Monolithic `agent.decide_next_turn()` replaced with a fleet of 6 specialized agents in `app/agents/`:
 
-| Agent | Responsibility | Owns |
+| Agent | File | Responsibility |
 |---|---|---|
-| **Planner** | At session start, decomposes the goal ("interview this candidate for Senior Backend") into a turn-by-turn execution plan. Reroutes mid-flight on failure. | The orchestration loop |
-| **Research Agent** | Reads parsed résumé + role + JD; identifies 3–5 likely weak areas to probe; outputs targeting hints. | Pre-session prep |
-| **Question Agent** | Picks the next question from the plan + targeting hints + adaptive difficulty signal. | "What to ask" |
-| **Evaluation Agent** | Scores the cumulative answer across the multi-dim rubric. Generates per-turn rationale. | Per-turn scoring |
-| **Verifier Agent** | Second-pass review of every Evaluation Agent score using a different prompt (and ideally a different model). Disagreements > threshold queue for human review. | Calibration |
-| **Feedback Agent** | At session end, synthesizes per-turn evals into the final report with strengths, improvements, and a coaching narrative. | Final report |
+| **Planner** | `planner.py` | Wraps `generate_question_plan` + injects `research_hints` as priority probe areas |
+| **Research Agent** | `researcher.py` | Queries past `session.skill_coverage` rows, surfaces weak skill IDs (avg < 5.0), calls LLM for `weak_areas` + `probe_topics` |
+| **Question Agent** | `question.py` | Pure-Python difficulty calibration — appends scaffold hint (< 3) or no-scaffold note (> 7) to question text |
+| **Evaluation Agent** | `evaluator.py` | 7-dim scoring: 5 LLM dims + 2 deterministic (confidence, keyword_coverage); runs in parallel with `decide_next_turn` via `asyncio.gather` |
+| **Verifier Agent** | `verifier.py` | Fire-and-forget second-pass LLM judge after `speak()` returns; writes `verified_scores` + `verifier_flags` in its own `AsyncSessionLocal()` |
+| **Feedback Agent** | `feedback.py` | Post-session coaching narrative (executive summary, strong/weak skills, recommendations); injected into PDF report |
 
-Concrete code change: extract from [agent.py](backend/app/interviews/agent.py) into `app/agents/{planner,research,question,evaluator,verifier,feedback}.py`. Each agent is a separate prompt + DB write boundary; they communicate through a typed message bus rather than implicit shared state. Persist agent traces (prompt, response, model, tokens, cost, latency) on each call — this becomes the observability backbone of Phase 6.
+#### ~~1.2 Advanced multi-dimensional scoring engine~~ ✅
 
-#### 1.2 Advanced multi-dimensional scoring engine
-
-Today's rubric is four dimensions (`clarity`, `depth`, `correctness`, `communication`) — all from a single LLM judgment, which is the noisiest possible signal. Combine LLM judgment with deterministic signals:
+7-dimension rubric (v2 schema), detected by presence of `"technical_depth"` key:
 
 ```jsonc
 {
-  "technical_depth":   8,    // LLM rubric (Evaluator Agent)
-  "problem_solving":   6,    // LLM rubric (Evaluator Agent)
-  "communication":     7,    // LLM rubric (Evaluator Agent)
-  "confidence":        5,    // prosody — pace, fillers, pauses (post-process Deepgram word timings + utterance gaps)
-  "consistency":       6,    // semantic similarity vs. prior answers (pgvector cosine)
-  "structure":         7,    // STAR / problem-solution detection (regex + LLM verifier)
-  "keyword_coverage":  0.62  // expected-skill keyword recall against the role's skill graph
+  "technical_depth":   8,   // LLM — EvaluatorAgent
+  "problem_solving":   6,   // LLM — EvaluatorAgent
+  "communication":     7,   // LLM — EvaluatorAgent
+  "structure":         7,   // LLM — EvaluatorAgent
+  "consistency":       6,   // LLM — EvaluatorAgent
+  "confidence":        5,   // deterministic — filler-word ratio + length bonus
+  "keyword_coverage":  6.2  // deterministic — skill graph keyword intersection
 }
 ```
 
-The deterministic signals (`confidence`, `consistency`, `keyword_coverage`) are the highest-leverage additions because:
+Weighted aggregation: `overall = LLM_avg × 0.8 + det_avg × 0.2`. Old 4-dim sessions → v1 path → equal-weight average (fully backward compatible). `schema_version` field in report summary distinguishes the two.
 
-1. They cover dimensions the LLM is genuinely bad at (prosody, cross-answer consistency).
-2. They defend against memorized / rehearsed answers (a candidate parroting a prepared response will score high on the LLM rubric but have abnormal `consistency` / `confidence` distributions).
-3. They produce calibrated numerical scores rather than LLM hallucinated integers.
+#### ~~1.3 Adaptive difficulty~~ ✅
 
-This becomes the **core IP** — the rubric, weights, and the embedding library are what hiring teams pay for.
+Running `_current_difficulty` (starts at 5.0): +0.5 if avg score ≥ 7.0, −0.5 if ≤ 4.0, clamped to [1.0, 10.0]. Question text annotated at extremes via `calibrate_question_text()`. Curve persisted in `Session.difficulty_curve` (JSONB); visible in report summary.
 
-#### 1.3 Adaptive difficulty
+#### ~~1.4 Skill graph evaluation~~ ✅
 
-Maintain a running difficulty rating per session and adjust on each turn:
+`skill_graphs/` package with JSON files for `backend_engineer` (10 skills), `frontend_engineer` (9), `data_scientist` (8), `product_manager` (8), `engineering_manager` (8), and `default` (5 generic). `Turn.skill_tags` (JSONB) records matched skill IDs per turn; `Session.skill_coverage` (JSONB) aggregates at session end. PDF report includes a Skill Coverage panel.
 
-- Strong answer (overall ≥ 7) → bump difficulty by **+0.5**, prefer follow-ups that probe edge cases
-- Weak answer (overall ≤ 4) → bump by **–0.5**, simplify the next planned question and offer a hint
-- Persist the curve in a new `Session.difficulty_curve: list[float]` JSONB column so the report can show calibration ("started at 5.0, ended at 7.5 — strong candidate, interview should have been harder").
+#### ~~1.5 Memory layer expansion~~ ✅ (cross-session weak-area tracking)
 
-This is where the system stops feeling like scripted Q&A and starts feeling like a real interviewer. It also produces signal for hiring teams: an interview that ramped to 8.5 and held there is much more informative than one that started at 5 and drifted.
+| Memory type | Status |
+|---|---|
+| **Short-term** (in-session context) | ✅ Redis orchestrator state |
+| **Cross-session skill memory** | ✅ ResearchAgent reads `session.skill_coverage` from past N sessions, injects `weak_areas` into the plan |
+| **Episodic** (timeline across sessions) | ⚠️ Partial — `ScoreTrend` + `difficulty_curve` per session |
+| **Vector knowledge base** | ❌ Still pending (Phase 4 in sequencing plan) |
 
-#### 1.4 Skill graph evaluation
+#### ~~1.6 LLM-as-judge with calibration~~ ✅ (VerifierAgent shipped)
 
-Per-role skill graphs (e.g. `senior_backend.json`: `["system design", "sql", "distributed systems", "concurrency", "leadership", "mentoring", "incident response"]`). Each turn maps to one or more skill nodes; the report shows which skills were touched, which were strong, which were thin.
-
-Implementation: a `skill_graphs/{role_slug}.json` library, a new `Turn.skill_tags: list[str]` JSONB column populated by the Evaluator Agent, and a "Skill coverage" panel on `ReportPage` adjacent to `ScoreBars`.
-
-The skill graph also unlocks **growth tracking** — the dashboard shows per-skill score over time across sessions, not just an overall trend.
-
-#### 1.5 Memory layer expansion
-
-Map directly onto the reference architecture's Memory layer:
-
-| Memory type | Status | Required changes |
-|---|---|---|
-| **Short-term** (in-session context) | ✅ Covered by Redis orchestrator state | — |
-| **Long-term** (cross-session per-user vector memory) | ❌ Missing | Index every answer into pgvector keyed by `(user_id, skill_tag)`; Question Agent retrieves "this user struggled with concurrency 2 sessions ago — probe again" |
-| **Episodic** (timeline across sessions) | ⚠️ Partial — `ScoreTrend` is the first slice | Add a "growth" view: skill graph progress over time, weak-area tracking, calibration drift |
-| **Knowledge base** (interview frameworks, role descriptions) | ❌ Missing | Embed canonical content (STAR, BAR, behavioral interviewing, role competency rubrics) as retrievable docs; Evaluator Agent retrieves the relevant fragment as grounding before scoring |
-| **User / Org profile store** | ❌ Missing | Per-user preferences (preferred difficulty, languages, coaching focus); per-org rubric weights, branding, default settings |
-
-#### 1.6 LLM-as-judge with calibration
-
-The Verifier Agent (1.1) is one half of this. The other half is a **continuous calibration metric**: weekly export the (Evaluator score, Verifier score) pairs, compute Cohen's kappa, alert on drops. Below a threshold, increase Verifier weight; below an absolute floor, route flagged sessions to a human reviewer queue.
-
-Bonus: collect human-reviewer scores as supervised labels, periodically fine-tune a smaller model on them — drives down per-session LLM cost over time without sacrificing quality. This is the path from "LLM API spend is our biggest line item" to "we own the model".
+VerifierAgent fires after every non-nudge turn, independently re-scores all 5 LLM dimensions, flags where `|original − verified| > 1.5`. Flagged dimensions stored in `Turn.verifier_flags`. Continuous calibration metric and human-review queue remain Phase 6 work.
 
 ---
 
@@ -952,8 +1350,8 @@ The diagram's Monitoring layer is currently `print(...)` and uvicorn console out
 
 - **OpenTelemetry distributed tracing** — span the full request: HTTP → orchestrator → STT → LLM → TTS → WS send. Critical for understanding p95 latency *which subsystem is the culprit*. Export to Tempo / Honeycomb / Datadog APM.
 - **LLM-call observability** — Langfuse / Helicone / Phoenix: every prompt + response + token count + cost + latency + model, queryable. Enables prompt iteration on real production data — currently impossible because we have no record of historical LLM calls.
-- **Structured logging** — `structlog` JSON output, ship to Datadog / Loki / CloudWatch. Stop greping the uvicorn console.
-- **Sentry on both ends** — frontend + backend. Group by tenant. Error Boundary already feeds the hook in development; production needs DSN + release tagging.
+- **Structured logging** ✅ — `structlog` with stdlib bridge wired in; JSON output to stdout in staging/prod, coloured console in development. Ship to Datadog / Loki / CloudWatch via log shipper.
+- **Sentry on both ends** ✅ — `sentry-sdk[fastapi]` on backend + `@sentry/react` on frontend; both opt-in via `SENTRY_DSN` / `VITE_SENTRY_DSN` env vars. Group by tenant once org support lands.
 - **Custom business metrics** — TTFT (time to first token), TBT (time between turns), interview-completion rate, score distribution per role, average tokens per session, cost per completed interview. Per-tenant, per-role.
 - **Eval datasets** — golden set of (answer, expected score) pairs; CI runs `decide_next_turn` against them on every PR; alert on regression. Without this, prompt tweaks ship blind.
 - **Drift detection** — score distribution per role tracked weekly; alert when the mean drifts > 0.5 (model degradation, prompt regression, or population shift).
@@ -1026,7 +1424,7 @@ Don't do all of this in parallel. A pragmatic 12-month sequence for a small (3�
 
 | Quarter | Theme | Concrete deliverables |
 |---|---|---|
-| **Q1** | **AI depth** (Phase 1) | Multi-agent split (Research / Question / Evaluator / Verifier / Feedback); multi-dim scoring engine with embeddings + prosody; adaptive difficulty; first eval dataset. |
+| **Q1** | ~~**AI depth** (Phase 1)~~ ✅ | ~~Multi-agent split (Research / Question / Evaluator / Verifier / Feedback); multi-dim scoring engine with embeddings + prosody; adaptive difficulty; first eval dataset.~~ **Done** — 6-agent fleet shipped; 7-dim scoring (5 LLM + 2 deterministic); adaptive difficulty curve; per-role skill graphs; cross-session weak-area memory; VerifierAgent + FeedbackAgent. |
 | **Q2** | **SaaS primitives** (Phase 2 + slice of 6) | Orgs / teams / RBAC; Stripe metered billing; per-tenant theming; Sentry + structured logs + LLM observability. First 5 paying customers. |
 | **Q3** | **Reliability + compliance** (Phases 5 + 7) | OTel tracing; circuit breakers + provider fallback; SOC 2 Type I audit kickoff; GDPR delete/export; bias monitoring report v1. |
 | **Q4** | **Integrations + growth** (Phases 3 + 9) | First ATS connector (Greenhouse); Slack bot; LinkedIn share badge; pricing-page launch; referral program; multi-language. |
@@ -1084,9 +1482,9 @@ Use this before any public deployment.
 - [x] Report generation moved to background task (not blocking HTTP)
 - [x] WebSocket reconnection logic implemented (Redis-backed orchestrator state)
 - [x] Concurrent session guard in `POST /sessions`
-- [x] Error Boundary wired up on frontend (Sentry SDK still pending)
-- [ ] Sentry SDK wired up on backend (`sentry-sdk[fastapi]`)
-- [ ] Structured JSON logging (`structlog`) — not plain `logging`
+- [x] Error Boundary wired up on frontend
+- [x] Sentry SDK wired up — backend (`sentry-sdk[fastapi]` in lifespan, opt-in via `SENTRY_DSN`) + frontend (`@sentry/react` in `main.tsx`, opt-in via `VITE_SENTRY_DSN`)
+- [x] Structured JSON logging (`structlog`) with stdlib bridge — JSON in staging/prod, console renderer in development
 - [ ] Health check endpoint (`/health`) returns dependency status (DB, Redis, external APIs)
 
 ### Database
@@ -1098,7 +1496,7 @@ Use this before any public deployment.
 
 ### Observability
 
-- [ ] Error tracking (Sentry or equivalent) — both frontend and backend
+- [x] Error tracking — Sentry on both frontend (`@sentry/react`) and backend (`sentry-sdk[fastapi]`), opt-in via env var
 - [ ] Uptime monitoring with alerting
 - [ ] LLM API cost dashboard / budget alerts (Groq / OpenAI console)
 - [ ] Log aggregation (CloudWatch, Datadog, Loki)

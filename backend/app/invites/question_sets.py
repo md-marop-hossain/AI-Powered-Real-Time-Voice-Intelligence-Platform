@@ -5,7 +5,7 @@ existing interview flow can consume them unchanged."""
 from __future__ import annotations
 
 import json
-import logging
+import structlog
 import re
 
 from app.core.llm_provider import JSON_RESPONSE, get_llm_provider
@@ -17,7 +17,7 @@ from app.interviews.agent import (
     _seniority_label,
 )
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger()
 
 
 # Bracketed placeholder tokens like "[Company Name]" or "[Programming Language]"

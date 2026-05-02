@@ -86,6 +86,10 @@ class Settings(BaseSettings):
     INVITE_EXPIRY_HOURS: int = 24
     INVITE_MAX_ATTEMPTS: int = 1
 
+    # --- Observability ---
+    SENTRY_DSN: str = ""
+    LOG_LEVEL: str = "INFO"
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]

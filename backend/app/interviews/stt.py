@@ -15,7 +15,7 @@ frames to Deepgram and emits four kinds of events back to the orchestrator:
 from __future__ import annotations
 
 import asyncio
-import logging
+import structlog
 from typing import Awaitable, Callable
 
 from deepgram import (
@@ -27,7 +27,7 @@ from deepgram import (
 
 from app.core.config import settings
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger()
 
 AsyncStr = Callable[[str], Awaitable[None]]
 AsyncVoid = Callable[[], Awaitable[None]]

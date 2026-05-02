@@ -33,4 +33,10 @@ class Turn(Base):
     )
     answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # Phase 1 AI Intelligence Layer columns
+    difficulty_level: Mapped[float | None] = mapped_column(Float, nullable=True)
+    skill_tags: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    verified_scores: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    verifier_flags: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
     session = relationship("Session", back_populates="turns")

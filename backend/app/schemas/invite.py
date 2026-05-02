@@ -40,6 +40,7 @@ class CreateInviteRequest(BaseModel):
     resume_id: UUID | None = Field(default=None)
 
     # Optional per-invite overrides; default to global ENV settings if omitted.
+    starts_at: datetime | None = None
     expires_in_hours: int | None = Field(default=None, ge=1, le=24 * 30)
     max_attempts: int | None = Field(default=None, ge=1, le=10)
 
@@ -92,6 +93,7 @@ class InviteSummary(BaseModel):
     industry: str | None
     duration_minutes: int
     expires_at: datetime
+    starts_at: datetime | None = None
     max_attempts: int
     attempts_used: int
     status: str
@@ -120,6 +122,7 @@ class PublicInviteView(BaseModel):
     industry: str | None
     duration_minutes: int
     expires_at: datetime
+    starts_at: datetime | None = None
     attempts_remaining: int
     creator_name: str | None = None
     invited_emails: list[str] = []
@@ -140,6 +143,7 @@ class ReceivedInviteView(BaseModel):
     industry: str | None
     duration_minutes: int
     expires_at: datetime
+    starts_at: datetime | None = None
     attempts_remaining: int
     creator_name: str | None = None
     invitee_status: str  # pending | in_progress | completed | expired

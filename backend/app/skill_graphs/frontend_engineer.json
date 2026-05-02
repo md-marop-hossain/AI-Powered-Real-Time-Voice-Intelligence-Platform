@@ -1,0 +1,93 @@
+{
+  "role": "frontend_engineer",
+  "skills": [
+    {
+      "id": "skill:ui_components",
+      "name": "UI Components & Design Systems",
+      "weight": 0.15,
+      "keywords": [
+        "component", "design system", "storybook", "atomic design", "reusable",
+        "props", "slot", "composition", "variant", "accessible", "aria"
+      ]
+    },
+    {
+      "id": "skill:state_management",
+      "name": "State Management",
+      "weight": 0.14,
+      "keywords": [
+        "state", "redux", "zustand", "context", "useState", "useReducer",
+        "global state", "local state", "derived state", "selector", "store",
+        "immutable", "side effect"
+      ]
+    },
+    {
+      "id": "skill:performance",
+      "name": "Frontend Performance",
+      "weight": 0.12,
+      "keywords": [
+        "lazy loading", "code splitting", "bundle size", "memoization",
+        "virtual dom", "rerender", "useMemo", "useCallback", "web vitals",
+        "lcp", "cls", "fid", "lighthouse", "tree shaking", "chunk"
+      ]
+    },
+    {
+      "id": "skill:async_data_fetching",
+      "name": "Async & Data Fetching",
+      "weight": 0.11,
+      "keywords": [
+        "fetch", "axios", "promise", "async await", "react query", "swr",
+        "loading state", "error boundary", "suspense", "optimistic update",
+        "cache", "polling", "websocket"
+      ]
+    },
+    {
+      "id": "skill:css_layout",
+      "name": "CSS & Layout",
+      "weight": 0.10,
+      "keywords": [
+        "flexbox", "grid", "responsive", "media query", "tailwind", "css module",
+        "specificity", "cascade", "animation", "transition", "viewport",
+        "mobile first", "breakpoint"
+      ]
+    },
+    {
+      "id": "skill:testing",
+      "name": "Frontend Testing",
+      "weight": 0.10,
+      "keywords": [
+        "jest", "vitest", "testing library", "playwright", "cypress", "snapshot",
+        "unit test", "integration test", "e2e", "mock", "user event",
+        "accessibility test", "coverage"
+      ]
+    },
+    {
+      "id": "skill:typescript",
+      "name": "TypeScript",
+      "weight": 0.10,
+      "keywords": [
+        "typescript", "type", "interface", "generic", "union", "intersection",
+        "type guard", "narrowing", "strict", "infer", "utility type",
+        "discriminated union"
+      ]
+    },
+    {
+      "id": "skill:web_fundamentals",
+      "name": "Web Fundamentals",
+      "weight": 0.09,
+      "keywords": [
+        "http", "dom", "browser", "event loop", "csrf", "cors", "cookie",
+        "local storage", "service worker", "pwa", "web worker",
+        "critical rendering path", "reflow", "repaint"
+      ]
+    },
+    {
+      "id": "skill:build_tooling",
+      "name": "Build & Tooling",
+      "weight": 0.09,
+      "keywords": [
+        "webpack", "vite", "rollup", "esbuild", "babel", "eslint", "prettier",
+        "module", "import", "bundler", "hot reload", "source map", "ci"
+      ]
+    }
+  ]
+}

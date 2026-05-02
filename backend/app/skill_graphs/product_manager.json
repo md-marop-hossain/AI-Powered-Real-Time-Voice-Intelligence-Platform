@@ -1,0 +1,84 @@
+{
+  "role": "product_manager",
+  "skills": [
+    {
+      "id": "skill:product_strategy",
+      "name": "Product Strategy",
+      "weight": 0.16,
+      "keywords": [
+        "vision", "roadmap", "strategy", "market", "competitive", "differentiation",
+        "positioning", "go to market", "moat", "north star", "okr", "mission"
+      ]
+    },
+    {
+      "id": "skill:user_research",
+      "name": "User Research & Discovery",
+      "weight": 0.14,
+      "keywords": [
+        "user research", "interview", "persona", "empathy map", "pain point",
+        "job to be done", "ethnography", "survey", "usability test",
+        "customer discovery", "problem space", "insight"
+      ]
+    },
+    {
+      "id": "skill:prioritization",
+      "name": "Prioritization & Decision Making",
+      "weight": 0.14,
+      "keywords": [
+        "prioritization", "rice", "ice", "kano", "moscow", "trade-off",
+        "opportunity cost", "impact", "effort", "backlog", "stakeholder",
+        "alignment", "decision framework"
+      ]
+    },
+    {
+      "id": "skill:metrics_analytics",
+      "name": "Metrics & Analytics",
+      "weight": 0.13,
+      "keywords": [
+        "metric", "kpi", "north star", "retention", "churn", "conversion",
+        "funnel", "cohort", "dau", "mau", "ltv", "arpu", "engagement",
+        "a/b test", "experiment"
+      ]
+    },
+    {
+      "id": "skill:execution",
+      "name": "Execution & Delivery",
+      "weight": 0.13,
+      "keywords": [
+        "sprint", "agile", "scrum", "kanban", "milestone", "launch",
+        "feature flag", "rollout", "phased", "mvp", "iteration",
+        "cross-functional", "ship"
+      ]
+    },
+    {
+      "id": "skill:stakeholder_management",
+      "name": "Stakeholder Management",
+      "weight": 0.12,
+      "keywords": [
+        "stakeholder", "alignment", "buy-in", "influence", "negotiation",
+        "communication", "executive", "presentation", "conflict", "trade-off",
+        "consensus", "escalation"
+      ]
+    },
+    {
+      "id": "skill:technical_fluency",
+      "name": "Technical Fluency",
+      "weight": 0.10,
+      "keywords": [
+        "api", "technical debt", "architecture", "feasibility", "engineering",
+        "scalability", "integration", "system", "latency", "database",
+        "infrastructure", "sprint planning"
+      ]
+    },
+    {
+      "id": "skill:market_analysis",
+      "name": "Market Analysis",
+      "weight": 0.08,
+      "keywords": [
+        "market size", "tam", "sam", "som", "competitor", "benchmark",
+        "trend", "industry", "customer segment", "willingness to pay",
+        "pricing", "positioning"
+      ]
+    }
+  ]
+}

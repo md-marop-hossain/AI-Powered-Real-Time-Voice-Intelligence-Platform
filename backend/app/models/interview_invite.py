@@ -33,6 +33,7 @@ class InterviewInvite(Base):
     # Opaque high-entropy token used in the invitation URL.
     token: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     max_attempts: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     attempts_used: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     status: Mapped[InviteStatus] = mapped_column(

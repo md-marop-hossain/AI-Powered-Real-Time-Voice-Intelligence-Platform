@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import logging
+import structlog
 import os
 import sys
 from datetime import datetime
@@ -12,7 +12,7 @@ from jinja2 import Template
 from app.models.session import Session
 from app.scoring.aggregator import aggregate_session_scores
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger()
 
 # WeasyPrint loads native GLib/Pango/Cairo via ctypes, which on Windows resolves
 # library names through PATH. Tesseract ships an outdated Pango that wins the
@@ -33,7 +33,7 @@ if sys.platform == "win32":
         log.warning("GTK3 runtime bin not found at %s; PDF rendering may fail", _gtk_bin)
 
 
-def build_report_summary(session: Session) -> dict:
+def build_report_summary(session: Session, narrative=None) -> dict:
     turns = list(session.turns or [])
     agg = aggregate_session_scores(turns)
     summary = {
@@ -45,7 +45,16 @@ def build_report_summary(session: Session) -> dict:
         "turn_count": len(turns),
         "overall_score": agg["overall_score"],
         "dimension_averages": agg["dimension_averages"],
+        "schema_version": agg.get("schema_version", "v1"),
         "focus_violations": int(getattr(session, "focus_violations", 0) or 0),
+        "skill_coverage": getattr(session, "skill_coverage", None) or {},
+        "difficulty_curve": getattr(session, "difficulty_curve", None) or [],
+        "narrative": {
+            "executive_summary": narrative.executive_summary if narrative else "",
+            "strong_skills": narrative.strong_skills if narrative else [],
+            "weak_skills": narrative.weak_skills if narrative else [],
+            "recommendations": narrative.recommendations if narrative else [],
+        },
         "turns": [
             {
                 "index": t.index,
@@ -54,6 +63,9 @@ def build_report_summary(session: Session) -> dict:
                 "answer": t.answer or "",
                 "scores": t.scores or {},
                 "rationale": t.rationale or "",
+                "skill_tags": getattr(t, "skill_tags", None) or [],
+                "difficulty_level": getattr(t, "difficulty_level", None),
+                "verified_scores": getattr(t, "verified_scores", None),
                 # Object-storage key only — the API layer turns this into a
                 # short-lived presigned URL on every report fetch so persisted
                 # JSON never carries an expiring URL.
@@ -123,6 +135,35 @@ PDF_TEMPLATE = Template("""
         {% endif %}
       </div>
     {% endfor %}
+
+    {% if summary.skill_coverage %}
+    <h2>Skill Coverage</h2>
+    <div class="score-grid">
+      {% for skill_id, score in summary.skill_coverage.items() %}
+      <div class="score-card">
+        <div class="label">{{ skill_id.replace('skill:', '').replace('_', ' ').title() }}</div>
+        <div class="value">{{ '%.1f'|format(score) }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if summary.narrative and summary.narrative.executive_summary %}
+    <h2>AI Coaching Feedback</h2>
+    <p>{{ summary.narrative.executive_summary }}</p>
+    {% if summary.narrative.strong_skills %}
+    <h3>Strengths</h3>
+    <ul>{% for s in summary.narrative.strong_skills %}<li>{{ s }}</li>{% endfor %}</ul>
+    {% endif %}
+    {% if summary.narrative.weak_skills %}
+    <h3>Areas to Improve</h3>
+    <ul>{% for s in summary.narrative.weak_skills %}<li>{{ s }}</li>{% endfor %}</ul>
+    {% endif %}
+    {% if summary.narrative.recommendations %}
+    <h3>Recommendations</h3>
+    <ul>{% for r in summary.narrative.recommendations %}<li>{{ r }}</li>{% endfor %}</ul>
+    {% endif %}
+    {% endif %}
 
     <p class="muted" style="margin-top: 32px; font-size: 11px;">
       Generated {{ now }}

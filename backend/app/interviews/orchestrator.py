@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
+import structlog
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -20,6 +20,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.base import LLM_TIMEOUT_SECONDS
 from app.interviews.agent import decide_next_turn
 from app.invites.service import mark_invitee_completed_for_session
 from app.models.session import Session, SessionStatus
@@ -30,7 +31,7 @@ from app.scoring.aggregator import aggregate_session_scores
 # reconnect window.
 _ORCH_STATE_TTL = 3 * 60 * 60
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger()
 
 
 # Patterns that should bypass the LLM and end the session immediately. The
@@ -133,6 +134,12 @@ class SessionOrchestrator:
         # at FOLLOWUP_CAP so the candidate isn't asked rephrasings of the
         # same probe over and over.
         self._followups_on_current_question: int = 0
+        # Phase 1: adaptive difficulty state — starts at 5.0, updated per turn
+        self._current_difficulty: float = 5.0
+        self._difficulty_curve: list[float] = []
+        # Research hints from questions_plan (populated at session creation time)
+        plan_payload = (session.questions_plan or {})
+        self._research_hints: dict = plan_payload.get("research_hints", {})
 
     # ------------------------------------------------------------------
     # Redis state persistence — enables mid-interview reconnection.
@@ -149,6 +156,8 @@ class SessionOrchestrator:
             "history": self.history,
             "current_turn_id": str(self.current_turn.id) if self.current_turn else None,
             "ended": self.ended,
+            "current_difficulty": self._current_difficulty,
+            "difficulty_curve": self._difficulty_curve,
         }
         try:
             from app.core.redis_client import get_redis
@@ -196,6 +205,8 @@ class SessionOrchestrator:
         self._followups_on_current_question = state.get("followups", 0)
         self.history = state.get("history", [])
         self.ended = state.get("ended", False)
+        self._current_difficulty = float(state.get("current_difficulty", 5.0))
+        self._difficulty_curve = list(state.get("difficulty_curve", []))
 
         current_turn_id = state.get("current_turn_id")
         if current_turn_id:
@@ -359,21 +370,63 @@ class SessionOrchestrator:
                     "is_nudge": True,
                 }
 
-            # Ask the agent. Always pass the cumulative answer so the model sees
-            # the whole context, not just the latest fragment.
-            decision = await decide_next_turn(
-                plan=self.plan,
-                resume_summary=self.resume_summary,
-                history=self.history,
-                answer=combined,
-                time_remaining_seconds=time_left,
-                role=self.session.role,
-                seniority=self.session.seniority,
-                focus=self.session.focus,
-                industry=self.session.industry,
-                nudges_so_far=self._nudges_on_current_turn,
-                followups_so_far=self._followups_on_current_question,
+            # Ask the agent. EvaluatorAgent and QuestionAgent (decide_next_turn)
+            # run in parallel so total latency is max(eval_time, decision_time).
+            from app.agents.base import NEW_DIMENSIONS
+            from app.agents.evaluator import EvalResult, evaluate_answer
+            from app.skill_graphs import load_skill_graph
+
+            skill_graph = load_skill_graph(self.session.role)
+
+            eval_coro = asyncio.wait_for(
+                evaluate_answer(
+                    question=self.current_turn.question,
+                    answer=combined,
+                    history=self.history,
+                    role=self.session.role,
+                    seniority=self.session.seniority,
+                    focus=self.session.focus,
+                    skill_graph=skill_graph,
+                    current_difficulty=self._current_difficulty,
+                ),
+                timeout=LLM_TIMEOUT_SECONDS,
             )
+            decision_coro = asyncio.wait_for(
+                decide_next_turn(
+                    plan=self.plan,
+                    resume_summary=self.resume_summary,
+                    history=self.history,
+                    answer=combined,
+                    time_remaining_seconds=time_left,
+                    role=self.session.role,
+                    seniority=self.session.seniority,
+                    focus=self.session.focus,
+                    industry=self.session.industry,
+                    nudges_so_far=self._nudges_on_current_turn,
+                    followups_so_far=self._followups_on_current_question,
+                ),
+                timeout=LLM_TIMEOUT_SECONDS,
+            )
+
+            eval_result, decision = await asyncio.gather(
+                eval_coro, decision_coro, return_exceptions=True
+            )
+
+            if isinstance(eval_result, Exception):
+                log.warning("EvaluatorAgent failed: %s — using fallback scores", eval_result)
+                eval_result = EvalResult(
+                    scores={d: 5.0 for d in NEW_DIMENSIONS},
+                    rationale="fallback (EvaluatorAgent unavailable)",
+                    skill_tags=[],
+                )
+            if isinstance(decision, Exception):
+                log.warning("decide_next_turn failed: %s — using fallback", decision)
+                decision = {
+                    "decision": "next_question",
+                    "next_text": "Thanks for that. Let's move on to the next question.",
+                    "scores": {},
+                    "rationale": "fallback",
+                }
 
             move = decision["decision"]
             next_text = decision.get("next_text") or ""
@@ -431,9 +484,21 @@ class SessionOrchestrator:
                     "is_nudge": True,
                 }
 
-            # Real evaluation: persist scores + rationale on the current turn.
-            self.current_turn.scores = decision.get("scores")
-            self.current_turn.rationale = decision.get("rationale")
+            # Real evaluation: persist 7-dim scores from EvaluatorAgent on the current turn.
+            self.current_turn.scores = eval_result.scores
+            self.current_turn.rationale = eval_result.rationale
+            self.current_turn.skill_tags = eval_result.skill_tags
+            self.current_turn.difficulty_level = self._current_difficulty
+
+            # Update adaptive difficulty curve
+            if eval_result.scores:
+                avg_score = sum(eval_result.scores.values()) / len(eval_result.scores)
+                if avg_score >= 7.0:
+                    self._current_difficulty = min(10.0, self._current_difficulty + 0.5)
+                elif avg_score <= 4.0:
+                    self._current_difficulty = max(1.0, self._current_difficulty - 0.5)
+                self._difficulty_curve.append(round(self._current_difficulty, 1))
+
             await self.db.commit()
 
             if move == "end_section" or (
@@ -447,10 +512,12 @@ class SessionOrchestrator:
             # same primary share the follow-up counter so the cap applies
             # across them.
             if move == "next_question":
+                from app.agents.question import calibrate_question_text
                 self.plan_idx += 1
                 kind = "primary"
                 if self.plan_idx < len(self.plan):
-                    next_text = next_text or self.plan[self.plan_idx]["question"]
+                    raw_q = next_text or self.plan[self.plan_idx]["question"]
+                    next_text = calibrate_question_text(raw_q, self._current_difficulty)
                 self._followups_on_current_question = 0
             else:
                 kind = "followup"
@@ -474,10 +541,33 @@ class SessionOrchestrator:
             return {
                 "decision": move,
                 "next_text": next_text,
-                "scores": decision.get("scores"),
+                "scores": eval_result.scores,
                 "ended": False,
                 "is_nudge": False,
             }
+
+    async def _update_session_skill_coverage(self) -> None:
+        """Compute per-skill coverage scores and persist difficulty curve to session."""
+        from app.skill_graphs import load_skill_graph
+        self.session.difficulty_curve = self._difficulty_curve
+        skill_graph = load_skill_graph(self.session.role)
+        if not skill_graph:
+            return
+        res = await self.db.execute(select(Turn).where(Turn.session_id == self.session.id))
+        turns = res.scalars().all()
+        coverage: dict[str, list[float]] = {s.id: [] for s in skill_graph.skills}
+        for t in turns:
+            if not t.skill_tags or not t.scores:
+                continue
+            td = t.scores.get("technical_depth", 5.0)
+            ps = t.scores.get("problem_solving", 5.0)
+            for sid in (t.skill_tags or []):
+                if sid in coverage:
+                    coverage[sid].append((td + ps) / 2.0)
+        self.session.skill_coverage = {
+            k: round(sum(v) / len(v), 2) if v else 0.0
+            for k, v in coverage.items()
+        }
 
     async def _aggregate_final_scores(self) -> None:
         """Populate session.final_scores from the persisted turns.
@@ -502,6 +592,7 @@ class SessionOrchestrator:
         self.session.status = SessionStatus.completed
         self.session.ended_at = datetime.now(timezone.utc)
         await self._aggregate_final_scores()
+        await self._update_session_skill_coverage()
         await mark_invitee_completed_for_session(self.db, self.session)
         await self.db.commit()
         await self._clear_state()

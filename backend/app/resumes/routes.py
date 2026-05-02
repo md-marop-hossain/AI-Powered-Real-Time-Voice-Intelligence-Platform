@@ -1,5 +1,5 @@
 import json
-import logging
+import structlog
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -21,7 +21,7 @@ from app.resumes.parser import (
 )
 from app.schemas.resume import ResumeResponse
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger()
 
 router = APIRouter(prefix="/resumes", tags=["resumes"])
 
