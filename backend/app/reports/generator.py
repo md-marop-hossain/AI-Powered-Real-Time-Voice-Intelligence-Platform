@@ -54,6 +54,10 @@ def build_report_summary(session: Session) -> dict:
                 "answer": t.answer or "",
                 "scores": t.scores or {},
                 "rationale": t.rationale or "",
+                # Object-storage key only — the API layer turns this into a
+                # short-lived presigned URL on every report fetch so persisted
+                # JSON never carries an expiring URL.
+                "audio_key": t.audio_key,
             }
             for t in turns
         ],

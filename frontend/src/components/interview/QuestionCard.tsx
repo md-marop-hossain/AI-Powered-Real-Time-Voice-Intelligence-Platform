@@ -12,6 +12,11 @@ interface Props {
   askedDuration: number | null;
   /** True while the AI is speaking this question. */
   isAsking: boolean;
+  /** Plan-level progress: 1-based primary index and total primary count. Both
+   *  must be present to render "Q{n} of {total}". Follow-ups carry the same
+   *  primary index, so the badge reads stably across a probe sequence. */
+  planIndex?: number | null;
+  planTotal?: number | null;
 }
 
 /**
@@ -21,7 +26,18 @@ interface Props {
  * Pure presentation — all timing comes from the parent (`isAsking`,
  * `askedDuration`).
  */
-export function QuestionCard({ index, text, askedDuration, isAsking }: Props) {
+export function QuestionCard({
+  index,
+  text,
+  askedDuration,
+  isAsking,
+  planIndex,
+  planTotal,
+}: Props) {
+  const showProgress =
+    typeof planIndex === "number" &&
+    typeof planTotal === "number" &&
+    planTotal > 0;
   return (
     <AnimatePresence mode="wait">
       {index !== null ? (
@@ -33,7 +49,14 @@ export function QuestionCard({ index, text, askedDuration, isAsking }: Props) {
           transition={{ duration: durations.slow, ease: easeEditorial }}
           className="max-w-prose"
         >
-          <NumberedMarker index={`Q${index}`} className="mb-6 block" />
+          <div className="mb-6 flex items-baseline gap-3">
+            <NumberedMarker index={`Q${index}`} />
+            {showProgress && (
+              <span className="font-mono text-eyebrow tracking-[0.18em] text-ink-muted">
+                {planIndex} OF {planTotal}
+              </span>
+            )}
+          </div>
 
           {/* Word-by-word reveal so the question reads as it's spoken. */}
           <p className="text-question text-ink">

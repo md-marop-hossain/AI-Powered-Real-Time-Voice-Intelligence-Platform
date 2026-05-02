@@ -26,6 +26,10 @@ from app.models.session import Session, SessionStatus
 from app.models.turn import Turn
 from app.scoring.aggregator import aggregate_session_scores
 
+# Redis key TTL: 3 hours — covers the longest allowed interview plus generous
+# reconnect window.
+_ORCH_STATE_TTL = 3 * 60 * 60
+
 log = logging.getLogger(__name__)
 
 
@@ -130,6 +134,128 @@ class SessionOrchestrator:
         # same probe over and over.
         self._followups_on_current_question: int = 0
 
+    # ------------------------------------------------------------------
+    # Redis state persistence — enables mid-interview reconnection.
+    # All methods are best-effort: a Redis failure is logged but never
+    # crashes the interview.
+    # ------------------------------------------------------------------
+
+    async def _save_state(self) -> None:
+        """Persist current orchestrator state to Redis."""
+        state = {
+            "plan_idx": self.plan_idx,
+            "nudges": self._nudges_on_current_turn,
+            "followups": self._followups_on_current_question,
+            "history": self.history,
+            "current_turn_id": str(self.current_turn.id) if self.current_turn else None,
+            "ended": self.ended,
+        }
+        try:
+            from app.core.redis_client import get_redis
+            redis = await get_redis()
+            await redis.setex(
+                f"interview:{self.session.id}:state",
+                _ORCH_STATE_TTL,
+                json.dumps(state),
+            )
+        except Exception as e:
+            log.warning("Could not save orchestrator state to Redis (session %s): %s",
+                        self.session.id, e)
+
+    async def _clear_state(self) -> None:
+        """Remove Redis state when the session ends normally."""
+        try:
+            from app.core.redis_client import get_redis
+            redis = await get_redis()
+            await redis.delete(f"interview:{self.session.id}:state")
+        except Exception as e:
+            log.warning("Could not clear orchestrator state from Redis (session %s): %s",
+                        self.session.id, e)
+
+    @staticmethod
+    async def load_state(session_id: UUID) -> dict | None:
+        """Return saved orchestrator state for *session_id*, or None."""
+        try:
+            from app.core.redis_client import get_redis
+            redis = await get_redis()
+            data = await redis.get(f"interview:{session_id}:state")
+            return json.loads(data) if data else None
+        except Exception as e:
+            log.warning("Could not load orchestrator state from Redis (session %s): %s",
+                        session_id, e)
+            return None
+
+    async def restore_state(self, state: dict) -> None:
+        """Restore in-memory fields from a Redis snapshot after a reconnect.
+
+        Does NOT call start() — started_at is already in the DB and must not
+        be overwritten, or time_remaining_seconds would reset the timer.
+        """
+        self.plan_idx = state.get("plan_idx", 0)
+        self._nudges_on_current_turn = state.get("nudges", 0)
+        self._followups_on_current_question = state.get("followups", 0)
+        self.history = state.get("history", [])
+        self.ended = state.get("ended", False)
+
+        current_turn_id = state.get("current_turn_id")
+        if current_turn_id:
+            res = await self.db.execute(
+                select(Turn).where(Turn.id == UUID(current_turn_id))
+            )
+            self.current_turn = res.scalar_one_or_none()
+
+        # Ensure DB status reflects reality.
+        if self.session.status == SessionStatus.pending:
+            self.session.status = SessionStatus.in_progress
+            if not self.session.started_at:
+                self.session.started_at = datetime.now(timezone.utc)
+            await self.db.commit()
+
+    async def recover_from_db(self) -> None:
+        """Fallback recovery when Redis state is unavailable but the session
+        is already in_progress (e.g. Redis restarted mid-interview).
+
+        Reconstructs the minimum necessary state from the persisted Turn rows
+        so the candidate can continue from where they left off.
+        """
+        # Load all turns ordered by index to rebuild history and plan position.
+        res = await self.db.execute(
+            select(Turn)
+            .where(Turn.session_id == self.session.id)
+            .order_by(Turn.index)
+        )
+        turns = list(res.scalars().all())
+
+        if not turns:
+            # Nothing persisted yet — treat as a fresh start but don't reset
+            # started_at; that's already in DB from the previous connection.
+            first_q = self.plan[0]["question"]
+            turn = Turn(
+                session_id=self.session.id,
+                index=1,
+                question=first_q,
+                question_kind="primary",
+            )
+            self.db.add(turn)
+            await self.db.commit()
+            await self.db.refresh(turn)
+            self.current_turn = turn
+            self.history.append({"role": "interviewer", "content": first_q})
+            return
+
+        # Reconstruct history from persisted turns.
+        for t in turns:
+            self.history.append({"role": "interviewer", "content": t.question})
+            if t.answer:
+                self.history.append({"role": "candidate", "content": t.answer})
+
+        # plan_idx = number of completed primary turns - 1 (0-indexed into plan).
+        primary_count = sum(1 for t in turns if t.question_kind == "primary")
+        self.plan_idx = max(0, primary_count - 1)
+        self.current_turn = turns[-1]
+
+    # ------------------------------------------------------------------
+
     @property
     def time_remaining_seconds(self) -> int:
         if not self.session.started_at:
@@ -157,6 +283,7 @@ class SessionOrchestrator:
         await self.db.refresh(turn)
         self.current_turn = turn
         self.history.append({"role": "interviewer", "content": first_q})
+        await self._save_state()
         return turn
 
     async def submit_answer(self, transcript: str) -> dict:
@@ -223,6 +350,7 @@ class SessionOrchestrator:
                 self._nudges_on_current_turn += 1
                 self.history.append({"role": "interviewer", "content": nudge_text})
                 await self.db.commit()
+                await self._save_state()
                 return {
                     "decision": "nudge",
                     "next_text": nudge_text,
@@ -294,6 +422,7 @@ class SessionOrchestrator:
                 self._nudges_on_current_turn += 1
                 self.history.append({"role": "interviewer", "content": next_text})
                 await self.db.commit()
+                await self._save_state()
                 return {
                     "decision": "nudge",
                     "next_text": next_text,
@@ -340,6 +469,7 @@ class SessionOrchestrator:
             self.current_turn = new_turn
             self._nudges_on_current_turn = 0
             self.history.append({"role": "interviewer", "content": next_text})
+            await self._save_state()
 
             return {
                 "decision": move,
@@ -374,6 +504,7 @@ class SessionOrchestrator:
         await self._aggregate_final_scores()
         await mark_invitee_completed_for_session(self.db, self.session)
         await self.db.commit()
+        await self._clear_state()
         return {
             "decision": "end_section",
             "next_text": closing_text,
@@ -425,6 +556,7 @@ class SessionOrchestrator:
                 end["count"] = current
                 end["limit"] = FOCUS_VIOLATION_LIMIT
                 return end
+            await self._save_state()
             return {
                 "count": current,
                 "limit": FOCUS_VIOLATION_LIMIT,

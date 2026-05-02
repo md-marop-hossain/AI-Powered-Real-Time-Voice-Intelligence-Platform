@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 
 from app.core.llm_provider import JSON_RESPONSE, get_llm_provider
 
@@ -22,7 +23,62 @@ from app.core.llm_provider import JSON_RESPONSE, get_llm_provider
 # forever. 30s is generous for a 70B model with JSON output.
 LLM_TIMEOUT_SECONDS = 30.0
 
+# Maximum résumé content (in characters) injected into any single LLM prompt.
+# Defends against runaway prompts AND limits the surface area for a malicious
+# résumé to influence the model.
+MAX_RESUME_PROMPT_CHARS = 8000
+# Per-string cap so one bloated field can't dominate the prompt budget.
+MAX_RESUME_FIELD_CHARS = 1500
+
+# Strip ASCII / Unicode control characters except newline and tab. PDFs and
+# DOCX exports occasionally ship with C0 / C1 control codes that confuse the
+# tokenizer and can be used to smuggle hidden instructions past a casual
+# eyeball-review.
+_CONTROL_CHARS = re.compile(
+    "[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F  ]"
+)
+
 log = logging.getLogger(__name__)
+
+
+def _sanitize_resume_text(text: str | None, max_chars: int = MAX_RESUME_PROMPT_CHARS) -> str:
+    """Strip control chars and cap length on a free-text résumé blob.
+
+    Intentionally NOT a content filter — we don't try to detect prompt
+    injection patterns ('Ignore previous instructions…') because false
+    positives would silently degrade real résumés. The cap + control-char
+    scrub gives the LLM a stable, bounded input; the system prompt is
+    responsible for refusing to follow embedded instructions.
+    """
+    if not text:
+        return ""
+    cleaned = _CONTROL_CHARS.sub("", text)
+    cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
+    return cleaned[:max_chars]
+
+
+def _sanitize_resume_obj(obj, field_max: int = MAX_RESUME_FIELD_CHARS) -> dict:
+    """Recursively clean a parsed-résumé dict so it's safe to JSON-dump
+    into a system prompt.
+
+    Strips control chars from string values, caps each string at
+    field_max, and leaves non-string scalars untouched.
+    """
+
+    def clean(v):
+        if isinstance(v, str):
+            return _CONTROL_CHARS.sub("", v)[:field_max]
+        if isinstance(v, list):
+            return [clean(x) for x in v]
+        if isinstance(v, dict):
+            return {
+                (clean(k) if isinstance(k, str) else k): clean(val)
+                for k, val in v.items()
+            }
+        return v
+
+    cleaned = clean(obj or {})
+    return cleaned if isinstance(cleaned, dict) else {}
 
 
 # ---------- Human-readable labels for prompt context ----------
@@ -113,7 +169,10 @@ async def generate_question_plan(
                     focus_label=_focus_label(focus),
                     industry_clause=_industry_clause(industry),
                     duration_minutes=duration_minutes,
-                    resume_json=json.dumps(parsed_resume or {}, ensure_ascii=False)[:8000],
+                    resume_json=json.dumps(
+                        _sanitize_resume_obj(parsed_resume),
+                        ensure_ascii=False,
+                    )[:MAX_RESUME_PROMPT_CHARS],
                 ),
             },
         ],
@@ -257,7 +316,7 @@ async def decide_next_turn(
                             focus_label=_focus_label(focus),
                             industry_clause=_industry_clause(industry),
                             plan_json=json.dumps(plan, ensure_ascii=False)[:4000],
-                            resume_summary=resume_summary[:2000],
+                            resume_summary=_sanitize_resume_text(resume_summary, max_chars=2000),
                             history=history_text[:6000],
                             answer=answer[:4000],
                             nudges_so_far=nudges_so_far,

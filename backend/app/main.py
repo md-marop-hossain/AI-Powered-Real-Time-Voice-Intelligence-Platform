@@ -16,6 +16,9 @@ from app.resumes.routes import router as resumes_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Hard-fail in non-dev environments if JWT_SECRET is left as a placeholder.
+    # In development this just warns; tests and local dev keep working.
+    settings.assert_jwt_secret_is_safe()
     try:
         ensure_bucket()
     except Exception as e:

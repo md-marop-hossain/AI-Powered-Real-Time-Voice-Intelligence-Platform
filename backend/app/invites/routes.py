@@ -11,13 +11,15 @@ Endpoints:
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Body, HTTPException, status
+from fastapi import APIRouter, Body, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from app.auth.routes import limiter
 from app.core.config import settings
 from app.core.dependencies import CurrentUser, DbSession
 from app.core.email import send_invite_email
@@ -82,11 +84,15 @@ def _summary(invite: InterviewInvite) -> InviteSummary:
     )
 
 
-async def _build_question_plan(req: CreateInviteRequest) -> tuple[list[dict], dict]:
+async def _build_question_plan(
+    req: CreateInviteRequest, parsed_resume: dict | None
+) -> tuple[list[dict], dict]:
     """Generate the question list according to the chosen mode.
 
     Returns (questions, meta) where meta is JSON-serializable provenance to
-    persist on the QuestionSet row.
+    persist on the QuestionSet row. `parsed_resume` is required for the two
+    LLM-driven modes (the schema validator already rejects requests that
+    omit it); predefined mode ignores it.
     """
     if req.mode == "predefined":
         plan = qs_builders.build_predefined(req.questions or [])
@@ -101,6 +107,7 @@ async def _build_question_plan(req: CreateInviteRequest) -> tuple[list[dict], di
             industry=req.industry,
             duration_minutes=req.duration_minutes,
             instructions=req.ai_instructions,
+            parsed_resume=parsed_resume or {},
         )
         meta = {
             "role": req.role,
@@ -108,6 +115,7 @@ async def _build_question_plan(req: CreateInviteRequest) -> tuple[list[dict], di
             "focus": req.focus,
             "industry": req.industry,
             "instructions": req.ai_instructions,
+            "resume_grounded": bool(parsed_resume),
         }
         return plan, meta
 
@@ -119,6 +127,7 @@ async def _build_question_plan(req: CreateInviteRequest) -> tuple[list[dict], di
         industry=req.industry,
         duration_minutes=req.duration_minutes,
         job_description=req.job_description or "",
+        parsed_resume=parsed_resume or {},
     )
     meta = {
         "role": req.role,
@@ -126,6 +135,7 @@ async def _build_question_plan(req: CreateInviteRequest) -> tuple[list[dict], di
         "focus": req.focus,
         "industry": req.industry,
         "job_description_preview": (req.job_description or "")[:400],
+        "resume_grounded": bool(parsed_resume),
     }
     return plan, meta
 
@@ -133,16 +143,44 @@ async def _build_question_plan(req: CreateInviteRequest) -> tuple[list[dict], di
 @router.post(
     "", response_model=CreateInviteResponse, status_code=status.HTTP_201_CREATED
 )
+@limiter.limit("20/hour")
 async def create_invites(
-    body: CreateInviteRequest, current_user: CurrentUser, db: DbSession
+    request: Request,
+    body: CreateInviteRequest,
+    current_user: CurrentUser,
+    db: DbSession,
 ) -> CreateInviteResponse:
     """Create one InterviewInvite (with one Invitee row) per email.
 
     Emails are sent best-effort — a delivery failure for one address does not
     roll back already-persisted invites; the failure is logged so the creator
     can resend later.
+
+    For `ai_generated` and `jd_based` modes the candidate's résumé must be
+    uploaded first (via POST /resumes/process) and its id passed in
+    `resume_id`. The schema validator already rejects requests that omit it
+    for those modes; here we additionally enforce that the résumé belongs to
+    the requesting creator (defence against IDOR / cross-tenant FK reuse).
     """
-    plan, meta = await _build_question_plan(body)
+    parsed_resume: dict | None = None
+    resume_id_to_persist: UUID | None = None
+    if body.resume_id is not None:
+        rres = await db.execute(
+            select(Resume).where(
+                Resume.id == body.resume_id,
+                Resume.user_id == current_user.id,
+            )
+        )
+        resume = rres.scalar_one_or_none()
+        if resume is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Résumé not found, or it doesn't belong to your account.",
+            )
+        parsed_resume = resume.parsed or {}
+        resume_id_to_persist = resume.id
+
+    plan, meta = await _build_question_plan(body, parsed_resume)
     if not plan:
         raise HTTPException(
             status_code=502, detail="Failed to generate question set"
@@ -152,6 +190,7 @@ async def create_invites(
         type=QuestionSetType(body.mode),
         content={"questions": plan},
         meta=meta,
+        resume_id=resume_id_to_persist,
     )
     db.add(qset)
     await db.flush()  # need qset.id
@@ -309,7 +348,9 @@ class StartInviteRequest(BaseModel):
 
 
 @router.post("/{token}/start", response_model=StartInviteResponse)
+@limiter.limit("5/hour")
 async def start_invite(
+    request: Request,
     token: str,
     current_user: CurrentUser,
     db: DbSession,
@@ -363,9 +404,25 @@ async def start_invite(
         invitee.user_id = current_user.id
     invitee.status = InviteeStatus.in_progress
 
-    # Resolve a resume to attach (optional).
+    # Resolve a resume to attach to the session.
+    # Priority order:
+    #   1. The résumé the creator uploaded at invite time (invite.question_set.resume_id)
+    #      — this is the SAME résumé the LLM used to generate the question
+    #      plan, so the live follow-up agent stays consistent with it.
+    #   2. An explicit body.resume_id (if the candidate wants to override —
+    #      validated against their own ownership).
+    #   3. The candidate's own most-recent résumé.
     resume_id: UUID | None = None
-    if body.resume_id is not None:
+    if invite.question_set and invite.question_set.resume_id is not None:
+        # No ownership check — the creator already authorised this résumé
+        # by attaching it to the invite they created. Just confirm the row
+        # still exists (could have been hard-deleted).
+        rres = await db.execute(
+            select(Resume.id).where(Resume.id == invite.question_set.resume_id)
+        )
+        resume_id = rres.scalar_one_or_none()
+
+    if resume_id is None and body.resume_id is not None:
         rres = await db.execute(
             select(Resume).where(
                 Resume.id == body.resume_id, Resume.user_id == current_user.id
@@ -375,7 +432,8 @@ async def start_invite(
         if not resume:
             raise HTTPException(status_code=404, detail="Resume not found")
         resume_id = resume.id
-    else:
+
+    if resume_id is None:
         rres = await db.execute(
             select(Resume)
             .where(Resume.user_id == current_user.id)
@@ -389,6 +447,20 @@ async def start_invite(
     plan = (invite.question_set.content or {}).get("questions", [])
     if not plan:
         raise HTTPException(status_code=500, detail="Invite has no question plan")
+
+    active = await db.execute(
+        select(Session.id)
+        .where(
+            Session.user_id == current_user.id,
+            Session.status.in_([SessionStatus.pending, SessionStatus.in_progress]),
+        )
+        .limit(1)
+    )
+    if active.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="You already have an active interview session.",
+        )
 
     # Persist the mode alongside the questions so the live orchestrator can
     # apply mode-specific rules at runtime (e.g. predefined disallows ad-hoc
@@ -422,7 +494,9 @@ async def start_invite(
 
 
 @router.post("/{invite_id}/participate", response_model=StartInviteResponse)
+@limiter.limit("10/hour")
 async def participate_as_creator(
+    request: Request,
     invite_id: UUID,
     current_user: CurrentUser,
     db: DbSession,
@@ -449,8 +523,30 @@ async def participate_as_creator(
     if not plan:
         raise HTTPException(status_code=500, detail="Invite has no question plan")
 
+    active = await db.execute(
+        select(Session.id)
+        .where(
+            Session.user_id == current_user.id,
+            Session.status.in_([SessionStatus.pending, SessionStatus.in_progress]),
+        )
+        .limit(1)
+    )
+    if active.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="You already have an active interview session.",
+        )
+
+    # Same priority order as start_invite — invite-level résumé wins so
+    # the creator self-test exercises the exact context the candidate will get.
     resume_id: UUID | None = None
-    if body.resume_id is not None:
+    if invite.question_set and invite.question_set.resume_id is not None:
+        rres = await db.execute(
+            select(Resume.id).where(Resume.id == invite.question_set.resume_id)
+        )
+        resume_id = rres.scalar_one_or_none()
+
+    if resume_id is None and body.resume_id is not None:
         rres = await db.execute(
             select(Resume).where(
                 Resume.id == body.resume_id, Resume.user_id == current_user.id
@@ -460,7 +556,8 @@ async def participate_as_creator(
         if not resume:
             raise HTTPException(status_code=404, detail="Resume not found")
         resume_id = resume.id
-    else:
+
+    if resume_id is None:
         rres = await db.execute(
             select(Resume)
             .where(Resume.user_id == current_user.id)
@@ -494,6 +591,77 @@ async def participate_as_creator(
 
     return StartInviteResponse(
         session_id=session.id, attempts_remaining=attempts_remaining(invite)
+    )
+
+
+class ResendInviteResponse(BaseModel):
+    invite_url: str
+    expires_at: datetime
+    sent_to: list[str] = Field(default_factory=list)
+    failures: list[str] = Field(default_factory=list)
+
+
+@router.post("/{invite_id}/resend", response_model=ResendInviteResponse)
+@limiter.limit("10/hour")
+async def resend_invite(
+    request: Request,
+    invite_id: UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> ResendInviteResponse:
+    """Creator-only: rotate the token, reset the expiry, and re-send the invite email.
+
+    Useful when the original delivery went to spam or the link expired before the
+    candidate could act. The old token stops working immediately on rotation —
+    treat resend as "I'm starting over with a fresh link" rather than "send the
+    same link again."
+    """
+    res = await db.execute(
+        select(InterviewInvite)
+        .where(
+            InterviewInvite.id == invite_id,
+            InterviewInvite.creator_id == current_user.id,
+        )
+        .options(selectinload(InterviewInvite.invitees))
+    )
+    invite = res.scalar_one_or_none()
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    if invite.status == InviteStatus.revoked:
+        raise HTTPException(status_code=410, detail="This invite has been revoked.")
+
+    invite.token = generate_invite_token()
+    invite.expires_at = expiry_from_hours(settings.INVITE_EXPIRY_HOURS)
+    await db.commit()
+    await db.refresh(invite)
+
+    sent: list[str] = []
+    failures: list[str] = []
+    for inv in (invite.invitees or []):
+        try:
+            await send_invite_email(
+                to_email=inv.email,
+                invite_url=build_invite_url(invite.token),
+                role=invite.role,
+                duration_minutes=invite.duration_minutes,
+                expires_at_human=invite.expires_at.strftime("%Y-%m-%d %H:%M UTC"),
+                inviter_name=current_user.full_name,
+            )
+            sent.append(inv.email)
+        except Exception as e:
+            log.warning(
+                "Failed to resend invite email to %s for invite %s: %s",
+                inv.email,
+                invite.id,
+                e,
+            )
+            failures.append(inv.email)
+
+    return ResendInviteResponse(
+        invite_url=build_invite_url(invite.token),
+        expires_at=invite.expires_at,
+        sent_to=sent,
+        failures=failures,
     )
 
 

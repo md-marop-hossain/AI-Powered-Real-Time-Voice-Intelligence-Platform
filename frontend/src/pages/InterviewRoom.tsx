@@ -31,6 +31,8 @@ interface CurrentQuestion {
   index: number;
   text: string;
   askedAt: number;
+  planIndex: number | null;
+  planTotal: number | null;
 }
 
 export default function InterviewRoom() {
@@ -389,7 +391,13 @@ export default function InterviewRoom() {
               const startedAt = performance.now();
               setTurns((prev) => {
                 const idx = prev.length + 1;
-                setCurrentQ({ index: idx, text: msg.text, askedAt: startedAt });
+                setCurrentQ({
+                  index: idx,
+                  text: msg.text,
+                  askedAt: startedAt,
+                  planIndex: typeof msg.q_index === "number" ? msg.q_index : null,
+                  planTotal: typeof msg.q_total === "number" ? msg.q_total : null,
+                });
                 return [
                   ...prev,
                   {
@@ -678,6 +686,8 @@ export default function InterviewRoom() {
             text={currentQ?.text ?? ""}
             askedDuration={askedDuration}
             isAsking={ui.isAISpeaking}
+            planIndex={currentQ?.planIndex ?? null}
+            planTotal={currentQ?.planTotal ?? null}
           />
         </section>
 

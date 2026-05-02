@@ -5,6 +5,15 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+_INSECURE_JWT_SECRETS = frozenset({
+    "",
+    "change-me",
+    "change-me-to-a-long-random-string",
+    "secret",
+    "your-secret-here",
+})
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -12,6 +21,12 @@ class Settings(BaseSettings):
         case_sensitive=True,
         extra="ignore",
     )
+
+    # --- Environment ---
+    # Production deploys MUST set ENV=production; this gates the JWT_SECRET
+    # validation below so a forgotten override fails fast at startup
+    # instead of silently signing tokens with a publicly known secret.
+    ENV: Literal["development", "staging", "production"] = "development"
 
     # --- Database ---
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/mockinterview"
@@ -74,6 +89,35 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
+    def assert_jwt_secret_is_safe(self) -> None:
+        """Refuse to boot a non-development app with a placeholder JWT secret.
+
+        Any value in `_INSECURE_JWT_SECRETS` is treated as a forgotten default
+        and short-circuits startup in staging/production. Development still
+        boots (with a loud warning) so local dev / pytest don't break.
+        """
+        is_insecure = (
+            self.JWT_SECRET in _INSECURE_JWT_SECRETS
+            or len(self.JWT_SECRET) < 16
+        )
+        if not is_insecure:
+            return
+        if self.ENV == "development":
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "JWT_SECRET is set to a known-insecure placeholder (%r). "
+                "This is OK in development but MUST be replaced with a "
+                "long random string before deploying.",
+                self.JWT_SECRET,
+            )
+            return
+        raise RuntimeError(
+            f"JWT_SECRET is insecure ({self.JWT_SECRET!r}). "
+            "Set JWT_SECRET to a long random string (>=16 chars) before "
+            f"running with ENV={self.ENV}."
+        )
 
 
 @lru_cache

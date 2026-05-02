@@ -11,6 +11,7 @@ import { HairlineDivider } from "@/components/editorial/HairlineDivider";
 import { LoadingLine } from "@/components/editorial/LoadingLine";
 import { EmptyState } from "@/components/editorial/EmptyState";
 import { ConfirmDialog } from "@/components/editorial/ConfirmDialog";
+import { ScoreTrend } from "@/components/dashboard/ScoreTrend";
 
 interface ReceivedInvite {
   token: string;
@@ -106,6 +107,21 @@ export default function DashboardPage() {
   }, [sessions, filter, search]);
 
   const groups = useMemo(() => groupByMonth(filtered), [filtered]);
+
+  const trendPoints = useMemo(
+    () =>
+      sessions
+        .filter(
+          (s) =>
+            s.status === "completed" &&
+            typeof s.final_scores?.overall_score === "number",
+        )
+        .map((s) => ({
+          date: s.created_at,
+          score: s.final_scores!.overall_score as number,
+        })),
+    [sessions],
+  );
 
   const onDelete = async (id: string) => {
     setDeletingId(id);
@@ -203,6 +219,9 @@ export default function DashboardPage() {
             </ul>
           </section>
         )}
+
+        {/* Score trend — only renders when there are 2+ scored sessions. */}
+        <ScoreTrend points={trendPoints} />
 
         {/* Stats strip */}
         {stats && stats.sessions_total > 0 && (

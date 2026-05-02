@@ -33,6 +33,12 @@ class CreateInviteRequest(BaseModel):
     # Mode C: job description text (required when mode == "jd_based")
     job_description: str | None = Field(default=None, max_length=10000)
 
+    # Required for ai_generated and jd_based modes — the candidate's résumé
+    # the creator uploaded (via POST /resumes/process) so the LLM can produce
+    # personalised questions and the live follow-up agent has consistent
+    # context. Predefined mode rejects this field (no LLM call to feed it to).
+    resume_id: UUID | None = Field(default=None)
+
     # Optional per-invite overrides; default to global ENV settings if omitted.
     expires_in_hours: int | None = Field(default=None, ge=1, le=24 * 30)
     max_attempts: int | None = Field(default=None, ge=1, le=10)
@@ -44,9 +50,25 @@ class CreateInviteRequest(BaseModel):
             if len(qs) < 1:
                 raise ValueError("predefined mode requires at least one question")
             self.questions = qs
+            if self.resume_id is not None:
+                raise ValueError(
+                    "predefined mode does not accept a résumé — the creator's "
+                    "questions are used verbatim with no LLM personalisation"
+                )
         elif self.mode == "jd_based":
             if not (self.job_description and self.job_description.strip()):
                 raise ValueError("jd_based mode requires job_description")
+            if self.resume_id is None:
+                raise ValueError(
+                    "jd_based mode requires resume_id — upload the candidate's "
+                    "résumé via POST /resumes/process first, then pass its id"
+                )
+        elif self.mode == "ai_generated":
+            if self.resume_id is None:
+                raise ValueError(
+                    "ai_generated mode requires resume_id — upload the candidate's "
+                    "résumé via POST /resumes/process first, then pass its id"
+                )
         return self
 
 

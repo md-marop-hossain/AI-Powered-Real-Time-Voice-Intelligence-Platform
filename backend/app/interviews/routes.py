@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 log = logging.getLogger(__name__)
 
+from app.auth.routes import limiter
 from app.core.dependencies import CurrentUser, DbSession
 from app.core.storage import delete_object, presigned_url
 from app.interviews.agent import generate_question_plan
@@ -56,8 +58,12 @@ async def _user_can_view_session(
 
 
 @router.post("", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("10/hour")
 async def start_session(
-    body: StartSessionRequest, current_user: CurrentUser, db: DbSession
+    request: Request,
+    body: StartSessionRequest,
+    current_user: CurrentUser,
+    db: DbSession,
 ) -> SessionResponse:
     # Resolve resume and ownership.
     res = await db.execute(
@@ -66,6 +72,20 @@ async def start_session(
     resume = res.scalar_one_or_none()
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
+
+    active = await db.execute(
+        select(Session.id)
+        .where(
+            Session.user_id == current_user.id,
+            Session.status.in_([SessionStatus.pending, SessionStatus.in_progress]),
+        )
+        .limit(1)
+    )
+    if active.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="You already have an active interview session.",
+        )
 
     plan = await generate_question_plan(
         role=body.role,
@@ -111,7 +131,8 @@ async def end_session(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if session.status != SessionStatus.completed:
+    just_completed = session.status != SessionStatus.completed
+    if just_completed:
         session.status = SessionStatus.completed
         session.ended_at = datetime.now(timezone.utc)
 
@@ -121,6 +142,15 @@ async def end_session(
     await mark_invitee_completed_for_session(db, session)
     await db.commit()
     await db.refresh(session)
+
+    # Fire-and-forget: generate report + notify the invite creator. Only on
+    # the actual transition to completed so retries / idempotent calls don't
+    # spam the creator with duplicate emails.
+    if just_completed:
+        from app.interviews.websocket import _generate_report_background
+
+        asyncio.create_task(_generate_report_background(session_id))
+
     return SessionResponse.model_validate(session)
 
 
@@ -204,12 +234,17 @@ async def get_report(
         # without a pdf_key if it fails, and let the user retry later.
         pdf_key: str | None = None
         try:
-            pdf_bytes = render_pdf(session, summary)
+            loop = asyncio.get_running_loop()
+            pdf_bytes = await loop.run_in_executor(
+                None, render_pdf, session, summary
+            )
             # Always key by the session's owner (candidate), not the
             # requesting user — the creator viewing a candidate's report
             # would otherwise scatter PDFs across multiple paths.
             pdf_key = f"reports/{session.user_id}/{session.id}.pdf"
-            upload_bytes(pdf_key, pdf_bytes, content_type="application/pdf")
+            await loop.run_in_executor(
+                None, upload_bytes, pdf_key, pdf_bytes, "application/pdf"
+            )
         except Exception as e:
             log.warning(
                 "PDF rendering failed for session %s; saving report without PDF: %s",
@@ -230,9 +265,22 @@ async def get_report(
         report = session.report
 
     pdf_url = presigned_url(report.pdf_key) if report.pdf_key else None
+
+    # Inject fresh per-turn audio URLs. The persisted summary stores only the
+    # `audio_key`; presigned URLs expire (1h default) so we re-sign on every
+    # report fetch and strip the raw key before returning.
+    summary = dict(report.summary or {})
+    enriched_turns = []
+    for t in summary.get("turns") or []:
+        t = dict(t)
+        key = t.pop("audio_key", None)
+        t["audio_url"] = presigned_url(key) if key else None
+        enriched_turns.append(t)
+    summary["turns"] = enriched_turns
+
     return ReportResponse(
         session_id=session.id,
         overall_score=report.overall_score,
-        summary=report.summary,
+        summary=summary,
         pdf_url=pdf_url,
     )

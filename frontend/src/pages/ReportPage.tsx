@@ -129,6 +129,36 @@ export default function ReportPage() {
   }
 
   const { summary, overall_score, pdf_url } = report;
+
+  const downloadTranscript = () => {
+    const lines: string[] = [];
+    lines.push(`Mock Interview Transcript — ${summary.role}`);
+    if (summary.started_at) {
+      lines.push(new Date(summary.started_at).toLocaleString());
+    }
+    lines.push(
+      `Overall: ${summary.overall_score.toFixed(1)}/10 · ${summary.turn_count} turns · ${summary.duration_minutes} min`,
+    );
+    lines.push("");
+    for (const t of summary.turns) {
+      lines.push(`Q${t.index} (${t.kind}): ${t.question}`);
+      lines.push(`A: ${t.answer || "(no answer)"}`);
+      if (t.rationale) lines.push(`Notes: ${t.rationale}`);
+      lines.push("");
+    }
+    const blob = new Blob([lines.join("\n")], {
+      type: "text/plain;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `transcript-${summary.role.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-${report.session_id.slice(0, 8)}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const strengths = summary.strengths ?? [
     "Strong, structured opening to most answers",
     "Plain-language explanations of technical work",
@@ -246,15 +276,24 @@ export default function ReportPage() {
         {/* Action footer */}
         <footer className="mt-32 flex flex-wrap items-baseline justify-center gap-8 border-t border-rule pt-12 text-small">
           {pdf_url && (
-            <a
-              href={pdf_url}
-              target="_blank"
-              rel="noreferrer"
-              className="editorial-link text-ink"
-            >
-              Download as PDF
-            </a>
+            <>
+              <a
+                href={pdf_url}
+                target="_blank"
+                rel="noreferrer"
+                className="editorial-link text-ink"
+              >
+                Download as PDF
+              </a>
+              <span className="text-ink-muted">·</span>
+            </>
           )}
+          <button
+            onClick={downloadTranscript}
+            className="editorial-link text-ink"
+          >
+            Download transcript
+          </button>
           <span className="text-ink-muted">·</span>
           <button
             onClick={() => navigate("/upload")}

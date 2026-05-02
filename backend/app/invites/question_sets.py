@@ -10,8 +10,10 @@ import re
 
 from app.core.llm_provider import JSON_RESPONSE, get_llm_provider
 from app.interviews.agent import (
+    MAX_RESUME_PROMPT_CHARS,
     _focus_label,
     _industry_clause,
+    _sanitize_resume_obj,
     _seniority_label,
 )
 
@@ -59,29 +61,29 @@ def build_predefined(questions: list[str]) -> list[dict]:
     ]
 
 
-# Dedicated system prompt for AI-generated invite plans. The agent.py prompt
-# assumes a parsed resume is provided; in invite mode it is NOT, so reusing it
-# made the LLM emit placeholders like "[Company Name]" or "[Programming
-# Language]" to fill the gap. This prompt is explicit that no resume exists
-# and forbids bracketed placeholders.
+# Dedicated system prompt for AI-generated invite plans. A parsed résumé IS
+# supplied (the creator uploads it at invite-creation time), so the prompt
+# leans into it for personalisation while still forbidding bracketed
+# placeholders if specific details are missing.
 _AI_INVITE_SYSTEM = (
-    "You are a senior technical interviewer designing a mock interview from "
-    "ONLY the role, seniority, focus area, industry, duration, and any extra "
-    "instructions from the creator. NO RESUME IS PROVIDED — do not reference "
-    "specific companies, projects, programming languages, or skills the "
-    "candidate hasn't supplied. Produce 6-10 well-scoped primary questions "
-    "sized to the seniority and matched to the focus area. Honour the "
-    "creator's extra instructions strictly when present.\n\n"
+    "You are a senior technical interviewer designing a personalised mock "
+    "interview. You are given the role, seniority, focus area, industry, "
+    "duration, optional creator instructions, AND the candidate's parsed "
+    "résumé (provided as JSON). Use the résumé to ground questions in the "
+    "candidate's real companies, projects, and stack — but do NOT invent "
+    "experience the résumé does not contain. Produce 6-10 well-scoped "
+    "primary questions sized to the seniority and matched to the focus "
+    "area. Honour the creator's extra instructions strictly when present.\n\n"
     "HARD RULES — VIOLATING THESE IS A FAILURE:\n"
     "1. Output finished, candidate-ready questions ONLY. NEVER use bracketed "
     "placeholder tokens such as [Company Name], [Programming Language], "
-    "[Project Name], [Alternative Language], [X], [Skill], etc. If you would "
-    "be tempted to insert a placeholder, ask the question generically "
-    "instead. Example: 'Walk me through a recent project where you owned "
-    "the design end-to-end' — NOT 'Tell me about [Project Name]'.\n"
-    "2. NEVER claim to have read the candidate's resume. Phrases like "
-    "\"I see you've worked at\", \"You've listed\", \"I noticed in your "
-    "resume\" are forbidden — there is no resume.\n"
+    "[Project Name], [Alternative Language], [X], [Skill], etc. If a "
+    "specific detail isn't in the résumé, ask the question generically "
+    "(e.g. 'a recent project where you owned the design') instead of "
+    "inserting a placeholder.\n"
+    "2. Reference the résumé naturally where it helps — companies, "
+    "projects, technologies the candidate has actually used. Don't "
+    "fabricate or extrapolate beyond what the JSON contains.\n"
     "3. Tailor difficulty to the stated seniority and the question mix to "
     "the stated focus.\n"
     "4. Honour the creator's extra instructions verbatim where they conflict "
@@ -97,6 +99,9 @@ Duration: {duration_minutes} minutes
 
 Additional creator instructions (may be empty):
 {instructions}
+
+Parsed résumé (JSON):
+{resume_json}
 
 Return JSON exactly in this shape:
 {{
@@ -114,6 +119,7 @@ async def build_ai_generated(
     focus: str | None,
     industry: str | None,
     duration_minutes: int,
+    parsed_resume: dict,
     instructions: str | None = None,
 ) -> list[dict]:
     provider = get_llm_provider()
@@ -129,6 +135,10 @@ async def build_ai_generated(
                     industry_clause=_industry_clause(industry),
                     duration_minutes=duration_minutes,
                     instructions=(instructions or "").strip()[:2000] or "(none)",
+                    resume_json=json.dumps(
+                        _sanitize_resume_obj(parsed_resume),
+                        ensure_ascii=False,
+                    )[:MAX_RESUME_PROMPT_CHARS],
                 ),
             },
         ],
@@ -143,12 +153,23 @@ async def build_ai_generated(
 
 
 _JD_SYSTEM = (
-    "You are a senior technical interviewer designing an interview from a job "
-    "description. Read the JD carefully, identify the top 6-10 skills, "
-    "responsibilities, and leadership/scope expectations, then produce well-scoped "
-    "primary questions that probe those areas. Tailor difficulty to the seniority "
-    "implied or stated in the JD. Avoid trivia; favour applied, scenario-based "
-    "questions a strong candidate could discuss for several minutes."
+    "You are a senior technical interviewer designing an interview that "
+    "matches a candidate's résumé to a specific job description. You receive "
+    "BOTH the JD and the candidate's parsed résumé. Identify the top 6-10 "
+    "skills, responsibilities, and leadership/scope expectations from the JD, "
+    "then probe those areas through questions grounded in the candidate's "
+    "actual experience where the résumé covers them — and through scenario "
+    "questions where it doesn't. Surface gaps gently (don't grill on missing "
+    "skills) but don't avoid them either. Tailor difficulty to the seniority "
+    "implied or stated in the JD.\n\n"
+    "HARD RULES:\n"
+    "1. Output finished, candidate-ready questions ONLY. NEVER use bracketed "
+    "placeholders like [Company Name] / [Project Name] / [X]. Ask "
+    "generically when a specific detail isn't in the résumé.\n"
+    "2. Reference the résumé naturally — companies, projects, tech stack — "
+    "but never invent experience.\n"
+    "3. Favour applied, scenario-based questions a strong candidate could "
+    "discuss for several minutes. Avoid trivia."
 )
 
 _JD_USER_TEMPLATE = """Target role: {role}
@@ -159,6 +180,9 @@ Duration: {duration_minutes} minutes
 
 Job description:
 \"\"\"{jd}\"\"\"
+
+Parsed résumé (JSON):
+{resume_json}
 
 Return JSON exactly in this shape:
 {{
@@ -177,6 +201,7 @@ async def build_jd_based(
     industry: str | None,
     duration_minutes: int,
     job_description: str,
+    parsed_resume: dict,
 ) -> list[dict]:
     provider = get_llm_provider()
     raw = await provider.chat(
@@ -191,6 +216,10 @@ async def build_jd_based(
                     industry_clause=_industry_clause(industry),
                     duration_minutes=duration_minutes,
                     jd=job_description.strip()[:8000],
+                    resume_json=json.dumps(
+                        _sanitize_resume_obj(parsed_resume),
+                        ensure_ascii=False,
+                    )[:MAX_RESUME_PROMPT_CHARS],
                 ),
             },
         ],
