@@ -8,8 +8,11 @@ import { HairlineDivider } from "@/components/editorial/HairlineDivider";
 import { NumberedMarker } from "@/components/editorial/NumberedMarker";
 import { EditorialButton } from "@/components/editorial/EditorialButton";
 import { ThemeToggle } from "@/components/editorial/ThemeToggle";
+import { ScrollProgress } from "@/components/editorial/ScrollProgress";
+import { Spotlight } from "@/components/editorial/Spotlight";
 import { VermillionUnderline } from "@/components/editorial/AuthSplit";
 import { easeEditorial, durations } from "@/lib/motion";
+import { useTilt } from "@/lib/useTilt";
 import { cn } from "@/lib/utils";
 
 const LOOP_QUESTIONS: string[] = [
@@ -25,6 +28,7 @@ export default function LandingPage() {
 
   return (
     <div className="min-h-screen bg-canvas">
+      <ScrollProgress />
       <LandingHeader isAuthed={isAuthed} />
       <main>
         <Hero isAuthed={isAuthed} />
@@ -286,6 +290,8 @@ function LiveRehearsalPanel() {
     };
   }, [questionIndex, question, reduce]);
 
+  const tilt = useTilt({ max: 3 });
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 24 }}
@@ -293,8 +299,25 @@ function LiveRehearsalPanel() {
       transition={{ duration: durations.slow, ease: easeEditorial, delay: 0.2 }}
       className="relative"
     >
-      {/* Outer card */}
-      <div className="relative border border-rule-strong bg-canvas-elevated p-6 md:p-10">
+      {/* Outer card — wrapped in cursor spotlight + 3D tilt for a modern,
+          alive feel. Tilt magnitude is intentionally small so the card
+          stays readable while reading the simulated interview. The "REC ●"
+          decoration lives outside the tilted surface so it doesn't get
+          clipped by the spotlight's overflow-hidden. */}
+      <motion.div
+        ref={tilt.ref}
+        onMouseMove={tilt.onMouseMove}
+        onMouseLeave={tilt.onMouseLeave}
+        style={{
+          rotateX: tilt.rotateX,
+          rotateY: tilt.rotateY,
+          transformPerspective: 1000,
+          transformStyle: "preserve-3d",
+        }}
+        className="relative"
+      >
+      <Spotlight radius={360} className="border border-rule-strong bg-canvas-elevated">
+      <div className="relative p-6 md:p-10">
         {/* Top status row */}
         <div className="mb-8 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -374,11 +397,15 @@ function LiveRehearsalPanel() {
           </ul>
         </section>
 
-        {/* Decoration corner */}
-        <span aria-hidden="true" className="pointer-events-none absolute -top-3 -left-3 font-mono text-eyebrow text-ink-muted">
-          REC ●
-        </span>
       </div>
+      </Spotlight>
+      {/* Decoration corner — sits outside the tilt/spotlight surface so
+          it doesn't get clipped by overflow-hidden, and stays static
+          (anchored to the outer card's edge) while the surface tilts. */}
+      <span aria-hidden="true" className="pointer-events-none absolute -top-3 -left-3 font-mono text-eyebrow text-ink-muted">
+        REC ●
+      </span>
+      </motion.div>
 
       {/* Caption */}
       <p className="mt-4 font-mono text-eyebrow text-ink-muted">
@@ -493,7 +520,7 @@ function Marquee() {
   return (
     <section
       aria-hidden="true"
-      className="border-y border-rule bg-canvas-elevated overflow-hidden"
+      className="marquee-pause-on-hover marquee-mask border-y border-rule bg-canvas-elevated overflow-hidden"
     >
       <div className="marquee-track flex whitespace-nowrap py-4 font-mono text-eyebrow text-ink-muted">
         {track.map((s, i) => (
@@ -587,6 +614,8 @@ function ThreeStep() {
 /* ---------- Sample interaction ---------- */
 
 function SampleInteraction() {
+  const tilt = useTilt({ max: 2 });
+
   return (
     <section id="sample" className="bg-canvas-sunken py-24 md:py-32">
       <div className="editorial-container">
@@ -605,11 +634,20 @@ function SampleInteraction() {
         </div>
 
         <motion.article
+          ref={tilt.ref}
+          onMouseMove={tilt.onMouseMove}
+          onMouseLeave={tilt.onMouseLeave}
           initial={{ opacity: 0, y: 24 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, margin: "-80px" }}
           transition={{ duration: durations.slow, ease: easeEditorial }}
-          className="grid gap-12 border-l border-rule-strong bg-canvas-elevated p-8 md:grid-cols-[180px_1fr] md:p-12"
+          style={{
+            rotateX: tilt.rotateX,
+            rotateY: tilt.rotateY,
+            transformPerspective: 1200,
+            transformStyle: "preserve-3d",
+          }}
+          className="relative grid gap-12 border-l border-rule-strong bg-canvas-elevated p-8 md:grid-cols-[180px_1fr] md:p-12"
         >
           <aside className="md:border-r md:border-rule md:pr-8">
             <Eyebrow>QUESTION 03 / 08</Eyebrow>

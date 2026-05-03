@@ -8,9 +8,11 @@ import { easeEditorial, durations } from "@/lib/motion";
 import { EditorialHeader } from "@/components/editorial/EditorialHeader";
 import { Eyebrow } from "@/components/editorial/Eyebrow";
 import { HairlineDivider } from "@/components/editorial/HairlineDivider";
-import { LoadingLine } from "@/components/editorial/LoadingLine";
 import { EmptyState } from "@/components/editorial/EmptyState";
 import { ConfirmDialog } from "@/components/editorial/ConfirmDialog";
+import { AnimatedNumber } from "@/components/editorial/AnimatedNumber";
+import { Spotlight } from "@/components/editorial/Spotlight";
+import { SkeletonSessionList } from "@/components/editorial/Skeleton";
 import { ScoreTrend } from "@/components/dashboard/ScoreTrend";
 
 interface ReceivedInvite {
@@ -228,22 +230,22 @@ export default function DashboardPage() {
           <section className="mb-16">
             <HairlineDivider />
             <div className="grid grid-cols-2 gap-x-6 gap-y-8 py-8 md:grid-cols-4">
-              <DashStat label="Sessions" value={stats.sessions_total.toString()} />
+              <DashStat
+                label="Sessions"
+                value={stats.sessions_total}
+              />
               <DashStat
                 label="Completed"
-                value={stats.sessions_completed.toString()}
+                value={stats.sessions_completed}
               />
               <DashStat
                 label="Avg score"
-                value={
-                  stats.avg_overall_score !== null
-                    ? stats.avg_overall_score.toFixed(1)
-                    : "—"
-                }
+                value={stats.avg_overall_score}
+                decimals={1}
               />
               <DashStat
                 label="Practiced"
-                value={formatPracticeTime(stats.total_practice_minutes)}
+                customDisplay={formatPracticeTime(stats.total_practice_minutes)}
               />
             </div>
             <HairlineDivider />
@@ -251,8 +253,9 @@ export default function DashboardPage() {
         )}
 
         {loading ? (
-          <div className="py-32">
-            <LoadingLine />
+          <div className="py-8">
+            <HairlineDivider strong />
+            <SkeletonSessionList rows={5} />
           </div>
         ) : sessions.length === 0 ? (
           <EmptyState
@@ -390,7 +393,12 @@ function SessionRowItem({
   const score = row.final_scores?.overall_score ?? null;
   return (
     <li>
-      <div className="group grid grid-cols-[80px_1fr_auto_auto_auto] items-baseline gap-6 py-6 transition-colors duration-base ease-editorial hover:bg-canvas-elevated">
+      {/* Cursor-tracking spotlight + arrow drift on hover. The Spotlight
+          replaces the previous flat `hover:bg-canvas-elevated` tint with
+          something that follows the pointer, so a long list reads as
+          interactive instead of static. */}
+      <Spotlight radius={420} color="rgba(232, 71, 44, 0.07)">
+      <div className="group grid grid-cols-[80px_1fr_auto_auto_auto] items-baseline gap-6 py-6">
         <button
           type="button"
           onClick={onOpen}
@@ -429,12 +437,24 @@ function SessionRowItem({
           →
         </button>
       </div>
+      </Spotlight>
       <HairlineDivider />
     </li>
   );
 }
 
-function DashStat({ label, value }: { label: string; value: string }) {
+interface DashStatProps {
+  label: string;
+  /** Numeric value to count up to. Pass `null` to render an em-dash. */
+  value?: number | null;
+  /** Decimal places when animating. Defaults to 0. */
+  decimals?: number;
+  /** When the value is naturally a string (e.g. "2h 35m"), pass it here
+   *  instead of `value`. Skips the count-up animation. */
+  customDisplay?: string;
+}
+
+function DashStat({ label, value, decimals = 0, customDisplay }: DashStatProps) {
   return (
     <div>
       <Eyebrow className="text-ink-muted">{label}</Eyebrow>
@@ -442,7 +462,11 @@ function DashStat({ label, value }: { label: string; value: string }) {
         className="mt-3 font-display text-[2rem] leading-none text-ink tabular-nums"
         style={{ fontVariationSettings: '"opsz" 36' }}
       >
-        {value}
+        {customDisplay ? (
+          customDisplay
+        ) : (
+          <AnimatedNumber value={value ?? null} decimals={decimals} />
+        )}
       </p>
     </div>
   );

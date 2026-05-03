@@ -13,6 +13,33 @@
   animation: marquee-scroll 32s linear infinite;
 }
 
+/* Pause the marquee when the user hovers it — invites reading without
+   chasing the words. */
+.marquee-pause-on-hover:hover .marquee-track {
+  animation-play-state: paused;
+}
+
+/* Soft gradient masks at both edges so words fade in / out instead of
+   being clipped by the section border. The mask is overridden on the
+   mobile viewport because the canvas is narrow enough that the fade
+   eats half the visible content. */
+.marquee-mask {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent,
+    black 8%,
+    black 92%,
+    transparent
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    black 8%,
+    black 92%,
+    transparent
+  );
+}
+
 html, body, #root {
   height: 100%;
 }
@@ -279,4 +306,54 @@ body::before {
 .hairline-strong {
   height: 1px;
   background: var(--rule-strong);
+}
+
+/* Skeleton shimmer — a moving highlight that travels across a flat bar.
+   Used by `SkeletonBlock` while async data resolves. The shimmer's width
+   and angle are picked so the bar reads as material-but-not-shiny. */
+@keyframes skeleton-shimmer {
+  0%   { background-position: -150% 0; }
+  100% { background-position: 250% 0; }
+}
+
+.skeleton-shimmer {
+  background-image: linear-gradient(
+    100deg,
+    transparent 30%,
+    var(--rule-strong) 50%,
+    transparent 70%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: skeleton-shimmer 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* Tactile film-grain overlay. Sits behind content on the same fixed
+   layer as the bloom gradient so it adds paper texture to the canvas
+   without making text look fuzzy. Uses an inline SVG so we don't ship
+   an extra asset. The body wrapper (`min-h-screen bg-canvas` overridden
+   to transparent in globals) lets both layers show through. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.05;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.55 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  background-size: 160px 160px;
+}
+
+[data-theme="dark"] body::after {
+  opacity: 0.07;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body::after {
+    opacity: 0.035;
+  }
+  .skeleton-shimmer {
+    animation: none;
+    background: var(--rule);
+  }
 }

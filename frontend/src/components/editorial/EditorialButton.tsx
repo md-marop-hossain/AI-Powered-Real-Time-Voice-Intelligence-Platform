@@ -50,20 +50,37 @@ export const EditorialButton = React.forwardRef<HTMLButtonElement, Props>(
           whileTap={reduce || disabled ? undefined : { scale: 0.97 }}
           transition={tapTransition}
           className={cn(
-            "inline-flex items-center justify-center gap-2",
+            "group relative inline-flex items-center justify-center gap-2",
             "h-12 px-6 rounded-[2px]",
             "text-eyebrow tracking-[0.18em]",
             bg,
             bgHover,
             "text-canvas-elevated",
-            "shadow-[0_1px_0_rgba(0,0,0,0.08)] hover:shadow-[0_4px_16px_-6px_rgba(0,0,0,0.35)]",
+            "shadow-[0_1px_0_rgba(0,0,0,0.08)] hover:shadow-[0_8px_24px_-8px_rgba(232,71,44,0.45)]",
             "transition-all duration-base ease-editorial",
             "disabled:opacity-50 disabled:pointer-events-none disabled:shadow-none",
             className,
           )}
           {...buttonProps}
         >
-          {children}
+          {/* Soft accent halo on hover — sits under the button label so it
+              never interferes with text contrast. Reduced-motion users
+              still see the shadow, just without the radial bloom. */}
+          {!reduce && (
+            <span
+              aria-hidden="true"
+              className={cn(
+                "pointer-events-none absolute -inset-px -z-10 rounded-[3px]",
+                "opacity-0 transition-opacity duration-base ease-editorial",
+                "group-hover:opacity-100",
+              )}
+              style={{
+                background:
+                  "radial-gradient(120% 60% at 50% 100%, rgba(232,71,44,0.35), transparent 70%)",
+              }}
+            />
+          )}
+          <span className="relative">{children}</span>
           {arrow && (
             <motion.span
               aria-hidden="true"
@@ -71,6 +88,7 @@ export const EditorialButton = React.forwardRef<HTMLButtonElement, Props>(
               animate={{ x: 0 }}
               whileHover={reduce ? undefined : { x: 4 }}
               transition={tapTransition}
+              className="relative"
             >
               →
             </motion.span>
