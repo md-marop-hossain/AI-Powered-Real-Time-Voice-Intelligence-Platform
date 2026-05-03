@@ -20,6 +20,8 @@ import InviteLandingPage from "@/pages/InviteLandingPage";
 import InvitesDashboardPage from "@/pages/InvitesDashboardPage";
 import InviteResultsPage from "@/pages/InviteResultsPage";
 import NotFoundPage from "@/pages/NotFoundPage";
+import { ScrollToTop } from "@/components/editorial/ScrollToTop";
+import { KeyboardShortcutsModal } from "@/components/editorial/KeyboardShortcutsModal";
 import { easeEditorial } from "@/lib/motion";
 
 export default function App() {
@@ -54,6 +56,9 @@ export default function App() {
     // popLayout the new page becomes the only thing affecting layout the
     // moment it mounts, so the scroll-reset above lands the user at the
     // top of the new page — not somewhere inside the old, fading one.
+    <>
+    <ScrollToTop />
+    <KeyboardShortcutsModal />
     <AnimatePresence initial={false} mode="popLayout">
       <motion.div
         key={location.pathname}
@@ -151,5 +156,6 @@ export default function App() {
         </Routes>
       </motion.div>
     </AnimatePresence>
+    </>
   );
 }

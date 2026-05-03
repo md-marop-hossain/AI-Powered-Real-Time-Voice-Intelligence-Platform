@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { Eyebrow } from "./Eyebrow";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ThemeToggle } from "./ThemeToggle";
+import { MobileNav } from "./MobileNav";
 import { useAuthStore } from "@/store/auth";
 
 const navLinks = [
@@ -39,7 +40,9 @@ export function EditorialHeader() {
         >
           Rehearsal
         </Link>
-        <nav aria-label="Primary" className="flex items-center gap-8">
+
+        {/* Desktop nav */}
+        <nav aria-label="Primary" className="hidden md:flex items-center gap-8">
           {navLinks.map((link) => (
             <NavLink
               key={link.to}
@@ -64,6 +67,9 @@ export function EditorialHeader() {
           )}
           <ThemeToggle />
         </nav>
+
+        {/* Mobile nav */}
+        <MobileNav />
       </div>
 
       <ConfirmDialog
