@@ -64,32 +64,194 @@ External API keys required:
 
 ## Quick Start
 
-```bash
-# 1. Clone
-git clone <repo-url> && cd AI-Powered-Voice-Based-Mock-Interview-System
+> **New here?** You'll need four things before any code runs: Docker Desktop, Python 3.11+, Node.js 20+, and API keys from four services. The checklist below walks you through each step.
 
-# 2. Infrastructure
+---
+
+### Step 1 — Get your API keys (do this first)
+
+The app won't start without these. Create free or trial accounts:
+
+| Service | What it does | Where to get the key |
+|---|---|---|
+| **Groq** (recommended) | Powers the AI interviewer | [console.groq.com](https://console.groq.com) → API Keys |
+| **Deepgram** | Converts your voice to text | [console.deepgram.com](https://console.deepgram.com) → Create API Key |
+| **ElevenLabs** | Reads questions aloud | [elevenlabs.io](https://elevenlabs.io) → Profile → API Key |
+| **Google Cloud** | Google Sign-In button | [console.cloud.google.com](https://console.cloud.google.com) → APIs & Services → Credentials → Create OAuth 2.0 Client ID (Web application). Add `http://localhost:5173` to Authorised JavaScript origins. Copy both the Client ID and Client Secret. |
+
+> **Can I skip any?**
+> - ElevenLabs: swap `TTS_PROVIDER=openai` and add your OpenAI key instead (uses `tts-1`).
+> - Groq: swap `LLM_PROVIDER=openai` if you prefer OpenAI for the LLM too.
+> - Google OAuth: you can register with email/password and skip the Google button, but you still need `GOOGLE_CLIENT_ID` set to a placeholder string so the frontend builds.
+
+---
+
+### Step 2 — Clone and start infrastructure
+
+```bash
+git clone <repo-url>
+cd AI-Powered-Voice-Based-Mock-Interview-System
+
+# Start Postgres, Redis, MinIO (S3-compatible storage), and MailHog (local email)
 docker compose up -d
 
-# 3. Backend
-cd backend
-python -m venv myenv
-# Windows:   .\myenv\Scripts\Activate.ps1
-# macOS/Linux: source myenv/bin/activate
-pip install -e .
-pip install psycopg2-binary
-cp .env.example .env        # fill in API keys (see Environment Variables section)
-alembic upgrade head
-uvicorn app.main:app --reload --port 8000
+# Verify all containers are running
+docker compose ps
+```
 
-# 4. Frontend (new terminal)
-cd ../frontend
+You should see six containers in the `running` state. Postgres listens on **port 5433** (not 5432) to avoid conflicts with any local Postgres install.
+
+> **Docker not installed?** Download [Docker Desktop](https://www.docker.com/products/docker-desktop/) for your OS. On Windows, enable the WSL 2 backend during installation.
+
+---
+
+### Step 3 — Backend setup
+
+Open a terminal in the `backend/` folder.
+
+#### 3a. Create a Python virtual environment
+
+```bash
+cd backend
+
+# Windows (PowerShell)
+py -3.11 -m venv myenv
+.\myenv\Scripts\Activate.ps1
+
+# macOS / Linux
+python3.11 -m venv myenv
+source myenv/bin/activate
+```
+
+> **Windows tip:** Use `py -3.11` explicitly — not bare `python`, which may point to the Microsoft Store stub or MSYS2.
+
+#### 3b. Install dependencies
+
+```bash
+pip install -e ".[dev]"
+pip install psycopg2-binary    # sync driver needed by Alembic
+```
+
+#### 3c. Create the `.env` file
+
+```bash
+cp .env.example .env
+```
+
+Open `.env` in a text editor and fill in the values below. Everything else can stay as the default:
+
+```env
+# Database (docker-compose exposes Postgres on 5433)
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5433/mockinterview
+
+# Redis (docker-compose default)
+REDIS_URL=redis://localhost:6379/0
+
+# Security — generate a random string, e.g.: openssl rand -hex 32
+JWT_SECRET=replace-this-with-a-long-random-string
+
+# LLM
+LLM_PROVIDER=groq
+LLM_MODEL=llama-3.3-70b-versatile
+GROQ_API_KEY=gsk_...
+
+# Speech
+DEEPGRAM_API_KEY=...
+TTS_PROVIDER=elevenlabs
+ELEVENLABS_API_KEY=...
+
+# Google OAuth (from Google Cloud Console)
+GOOGLE_CLIENT_ID=xxxxxxxxxx.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=GOCSPX-...
+
+# Email — MailHog catches all emails locally, no real SMTP needed in dev
+SMTP_HOST=localhost
+SMTP_PORT=1025
+SMTP_FROM=noreply@mockinterview.local
+
+# Frontend URL (leave as-is for local dev)
+FRONTEND_URL=http://localhost:5173
+CORS_ORIGINS=http://localhost:5173
+```
+
+> **Want to see sent emails?** Open [http://localhost:8025](http://localhost:8025) — MailHog catches every outgoing email so you can see OTP codes and invite links without a real mail server.
+
+#### 3d. Run database migrations
+
+```bash
+alembic upgrade head
+```
+
+This creates all tables. You should see migrations `0001` through `0008` applied.
+
+#### 3e. Start the backend server
+
+```bash
+uvicorn app.main:app --reload --port 8000
+```
+
+Verify it works: [http://localhost:8000/health](http://localhost:8000/health) should return `{"status":"ok", ...}`.
+Interactive API docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+
+---
+
+### Step 4 — Frontend setup
+
+Open a **second terminal** in the `frontend/` folder.
+
+```bash
+cd frontend
 npm install
-cp .env.example .env        # fill in VITE_GOOGLE_CLIENT_ID
+cp .env.example .env
+```
+
+Open `frontend/.env` and set:
+
+```env
+VITE_API_URL=http://localhost:8000
+VITE_WS_URL=ws://localhost:8000
+VITE_GOOGLE_CLIENT_ID=xxxxxxxxxx.apps.googleusercontent.com
+```
+
+Then start the dev server:
+
+```bash
 npm run dev
 ```
 
-Open http://localhost:5173 and sign up.
+---
+
+### Step 5 — Open the app
+
+Go to [http://localhost:5173](http://localhost:5173) and create an account.
+
+**First-time flow:**
+1. Register with email/password (or Google Sign-In)
+2. Check MailHog at [http://localhost:8025](http://localhost:8025) for your 6-digit OTP
+3. Upload your résumé (PDF, DOCX, or TXT)
+4. Click **New Interview**, choose a role and duration, and start talking
+
+---
+
+### Quick-reference: all local URLs
+
+| URL | What it is |
+|---|---|
+| [http://localhost:5173](http://localhost:5173) | Frontend (React app) |
+| [http://localhost:8000](http://localhost:8000) | Backend (FastAPI) |
+| [http://localhost:8000/docs](http://localhost:8000/docs) | Swagger / OpenAPI |
+| [http://localhost:8025](http://localhost:8025) | MailHog — catch-all inbox |
+| [http://localhost:9001](http://localhost:9001) | MinIO console (`minioadmin` / `minioadmin`) |
+
+---
+
+### Stopping everything
+
+```bash
+# Stop the frontend and backend with Ctrl+C in each terminal, then:
+docker compose down          # stop containers, keep data
+docker compose down -v       # stop containers AND wipe all data (clean slate)
+```
 
 ---
 
