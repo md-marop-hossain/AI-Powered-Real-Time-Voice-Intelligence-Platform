@@ -1,4 +1,4 @@
-# AI-Powered Voice-Based Mock Interview System
+# AI-Powered Real-Time Voice Intelligence Platform
 
 A full-stack web application where a candidate uploads their résumé and an AI voice agent runs a real-time mock interview — asking contextual questions, following up on answers, scoring performance, and generating a detailed PDF report.
 
